@@ -229,7 +229,11 @@ def list(project: Optional[str], feature: Optional[str], active: bool, all: bool
             store.update_container_status(container["container_id"], docker_status)
             container["status"] = docker_status
 
-        status_color = "green" if container["status"] == "running" else "red"
+        status_color = (
+            "green"
+            if container["status"] == "running"
+            else "yellow" if container["status"] == "exited" else "red"
+        )
 
         table.add_row(
             container["project_name"],
@@ -334,14 +338,27 @@ def stop(container_ref: Optional[str], project: Optional[str], all: bool) -> Non
 def clean(project: Optional[str], all: bool, force: bool) -> None:
     """Remove stopped sandbox containers."""
 
+    # First, sync container statuses with Docker
+    all_containers = store.list_containers(project=project if not all else None)
+    for container in all_containers:
+        docker_status = manager.get_container_status(container["container_id"])
+        if docker_status != container["status"]:
+            store.update_container_status(container["container_id"], docker_status)
+
     containers_to_remove = []
 
     if all:
-        containers = store.list_containers(status="stopped")
-        containers_to_remove = containers
+        # Get containers with status "stopped" or "exited" or "not_found"
+        containers = store.list_containers()
+        containers_to_remove = [
+            c for c in containers if c["status"] in ["stopped", "exited", "not_found", "error"]
+        ]
     elif project:
-        containers = store.list_containers(project=project, status="stopped")
-        containers_to_remove = containers
+        # Get containers for project with status "stopped" or "exited" or "not_found"
+        containers = store.list_containers(project=project)
+        containers_to_remove = [
+            c for c in containers if c["status"] in ["stopped", "exited", "not_found", "error"]
+        ]
     else:
         console.print("[red]Specify --project or --all[/red]")
         sys.exit(1)
@@ -370,7 +387,10 @@ def clean(project: Optional[str], all: bool, force: bool) -> None:
         )
 
         for container in containers_to_remove:
-            manager.remove_container(container["container_id"])
+            # Try to remove from Docker first (force=True handles both running and stopped)
+            if container["status"] != "not_found":
+                manager.remove_container(container["container_id"])
+            # Always remove from database
             store.remove_container(container["container_id"])
             progress.advance(task)
 
@@ -404,7 +424,11 @@ def exec(container_ref: str, command: tuple) -> None:
 def build(force: bool) -> None:
     """Build or rebuild the base Docker image."""
 
-    if not force and manager.image_exists("sandbox-claude-base:latest") and not click.confirm("Base image already exists. Rebuild?"):
+    if (
+        not force
+        and manager.image_exists("sandbox-claude-base:latest")
+        and not click.confirm("Base image already exists. Rebuild?")
+    ):
         console.print("[dim]Cancelled[/dim]")
         return
 
