@@ -59,14 +59,35 @@ else
     print_info "Claude will configure on first run. Remember to add your API key."
 fi
 
-# Check if .claude directory exists
-if [ -d "/root/.claude" ]; then
-    print_success "Claude directory mounted successfully"
+# Check and setup .claude directory
+if [ -d "/tmp/.claude.host" ]; then
+    # Copy the host's .claude directory if it was mounted to temp location
+    if [ -d "/workspace/.sandbox-claude/.claude" ]; then
+        print_info "Restoring .claude directory from previous session"
+        rm -rf /root/.claude
+        cp -r /workspace/.sandbox-claude/.claude /root/.claude
+    else
+        print_info "Copying .claude directory from host (writable copy)"
+        cp -r /tmp/.claude.host /root/.claude
+    fi
+    chmod -R 700 /root/.claude  # Secure permissions
+    print_success "Claude directory ready (editable)"
     # List configuration files
     if [ "$(ls -A /root/.claude 2>/dev/null)" ]; then
         echo "  Configuration files:"
         ls -la /root/.claude | grep -E "^-" | awk '{print "    • " $9}'
     fi
+elif [ -d "/workspace/.sandbox-claude/.claude" ]; then
+    # No host config, but we have a persisted one
+    print_info "Restoring .claude directory from previous session"
+    cp -r /workspace/.sandbox-claude/.claude /root/.claude
+    chmod -R 700 /root/.claude
+    print_success "Claude directory restored"
+else
+    # Create empty .claude directory
+    print_info "Creating new .claude directory"
+    mkdir -p /root/.claude
+    chmod 700 /root/.claude
 fi
 
 # Initialize git config if not set
@@ -125,10 +146,21 @@ alias sandbox-install='apt-get install -y'
 
 # Function to persist Claude configuration
 persist_claude_config() {
-    if [ -f "/root/.claude.json" ] && [ -d "/workspace" ]; then
+    if [ -d "/workspace" ]; then
         mkdir -p /workspace/.sandbox-claude
-        cp /root/.claude.json /workspace/.sandbox-claude/.claude.json
-        echo "[INFO] Claude configuration saved for next session" >&2
+        
+        # Save .claude.json if it exists
+        if [ -f "/root/.claude.json" ]; then
+            cp /root/.claude.json /workspace/.sandbox-claude/.claude.json
+            echo "[INFO] Claude configuration (.claude.json) saved for next session" >&2
+        fi
+        
+        # Save .claude directory if it exists
+        if [ -d "/root/.claude" ]; then
+            rm -rf /workspace/.sandbox-claude/.claude
+            cp -r /root/.claude /workspace/.sandbox-claude/.claude
+            echo "[INFO] Claude directory (.claude/) saved for next session" >&2
+        fi
     fi
 }
 
