@@ -37,6 +37,7 @@ def _prepare_mounts(no_mount_config: bool) -> dict[str, dict[str, Any]]:
     if not no_mount_config:
         claude_config = Path.home() / ".claude"
         claude_json = Path.home() / ".claude.json"
+        claude_creds = Path.home() / ".claude_creds.json"
 
         if claude_config.exists():
             mounts["claude_config"] = {
@@ -50,6 +51,14 @@ def _prepare_mounts(no_mount_config: bool) -> dict[str, dict[str, Any]]:
             mounts["claude_json"] = {
                 "source": str(claude_json),
                 "target": "/tmp/.claude.json.host",
+                "type": "bind",
+                "read_only": True,
+            }
+
+        if claude_creds.exists():
+            mounts["claude_creds"] = {
+                "source": str(claude_creds),
+                "target": "/tmp/.claude_creds.json.host",
                 "type": "bind",
                 "read_only": True,
             }

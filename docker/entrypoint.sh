@@ -65,10 +65,10 @@ if [ -d "/tmp/.claude.host" ]; then
     if [ -d "/workspace/.sandbox-claude/.claude" ]; then
         print_info "Restoring .claude directory from previous session"
         rm -rf /root/.claude
-        cp -r /workspace/.sandbox-claude/.claude /root/.claude
+        cp -r /workspace/.sandbox-claude/.claude/. /root/.claude
     else
         print_info "Copying .claude directory from host (writable copy)"
-        cp -r /tmp/.claude.host /root/.claude
+        cp -r /tmp/.claude.host/. /root/.claude
     fi
     chmod -R 700 /root/.claude  # Secure permissions
     print_success "Claude directory ready (editable)"
@@ -80,7 +80,7 @@ if [ -d "/tmp/.claude.host" ]; then
 elif [ -d "/workspace/.sandbox-claude/.claude" ]; then
     # No host config, but we have a persisted one
     print_info "Restoring .claude directory from previous session"
-    cp -r /workspace/.sandbox-claude/.claude /root/.claude
+    cp -r /workspace/.sandbox-claude/.claude/. /root/.claude
     chmod -R 700 /root/.claude
     print_success "Claude directory restored"
 else
@@ -88,6 +88,30 @@ else
     print_info "Creating new .claude directory"
     mkdir -p /root/.claude
     chmod 700 /root/.claude
+fi
+
+# Check and setup credentials file
+if [ -f "/tmp/.claude_creds.json.host" ]; then
+    # Ensure .claude directory exists
+    mkdir -p /root/.claude
+    
+    # Check if there's a persisted version in workspace first
+    if [ -f "/workspace/.sandbox-claude/.credentials.json" ]; then
+        print_info "Restoring credentials from previous session"
+        cp /workspace/.sandbox-claude/.credentials.json /root/.claude/.credentials.json
+    else
+        print_info "Copying credentials from host (writable copy)"
+        cp /tmp/.claude_creds.json.host /root/.claude/.credentials.json
+    fi
+    chmod 600 /root/.claude/.credentials.json  # Secure permissions
+    print_success "Claude credentials ready (.credentials.json)"
+elif [ -f "/workspace/.sandbox-claude/.credentials.json" ]; then
+    # No host creds, but we have a persisted one
+    mkdir -p /root/.claude
+    print_info "Restoring credentials from previous session"
+    cp /workspace/.sandbox-claude/.credentials.json /root/.claude/.credentials.json
+    chmod 600 /root/.claude/.credentials.json
+    print_success "Claude credentials restored"
 fi
 
 # Initialize git config if not set
@@ -158,8 +182,14 @@ persist_claude_config() {
         # Save .claude directory if it exists
         if [ -d "/root/.claude" ]; then
             rm -rf /workspace/.sandbox-claude/.claude
-            cp -r /root/.claude /workspace/.sandbox-claude/.claude
+            cp -r /root/.claude/. /workspace/.sandbox-claude/.claude
             echo "[INFO] Claude directory (.claude/) saved for next session" >&2
+        fi
+        
+        # Save credentials file if it exists
+        if [ -f "/root/.claude/.credentials.json" ]; then
+            cp /root/.claude/.credentials.json /workspace/.sandbox-claude/.credentials.json
+            echo "[INFO] Claude credentials (.credentials.json) saved for next session" >&2
         fi
     fi
 }

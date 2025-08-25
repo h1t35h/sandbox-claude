@@ -181,19 +181,23 @@ defaults:
 #### Claude Configuration
 
 The tool intelligently handles Claude configuration:
-- **Automatic Copy**: Your `~/.claude.json` is copied into the container (not mounted directly)
-- **Editable**: Claude can modify the configuration inside the container
-- **Host Protection**: Original host file remains untouched
+- **Automatic Copy**: Your `~/.claude.json` and `~/.claude/` directory are copied into the container (not mounted directly)
+- **Credentials Support**: Your `~/.claude_creds.json` is automatically copied to `~/.claude/.credentials.json` in the container
+- **Editable**: Claude can modify all configuration files inside the container
+- **Host Protection**: Original host files remain untouched (mounted read-only to temp locations)
 - **Session Persistence**: Changes are saved to `/workspace/.sandbox-claude/` for next session
-- **Secure**: Configuration file has 600 permissions (owner read/write only)
+- **Secure**: Configuration files have proper permissions (600 for files, 700 for directories)
+
+Configuration files handled:
+- `~/.claude.json` → Copied to container's `~/.claude.json`
+- `~/.claude/` → Copied to container's `~/.claude/`
+- `~/.claude_creds.json` → Copied to container's `~/.claude/.credentials.json`
 
 Configuration behavior:
-1. On container start: Copies host's `.claude.json` to container
-2. During session: Claude can modify the configuration as needed
-3. Between sessions: Configuration persists in workspace directory
-4. Manual save: Run `save-claude-config` command in container
-
-The `.claude/` directory is still mounted read-only for other configuration files.
+1. On container start: Copies host's configuration files to writable locations in container
+2. During session: Claude can modify all configuration as needed
+3. Between sessions: Configuration persists in `/workspace/.sandbox-claude/` directory
+4. Manual save: Run `save-claude-config` command in container to persist changes
 
 To skip mounting configuration:
 ```bash
