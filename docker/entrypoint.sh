@@ -124,24 +124,38 @@ elif [ -f "/workspace/.sandbox-claude/.credentials.json" ]; then
     print_success "Claude credentials restored"
 fi
 
-# Initialize git config if not set
-if [ -z "$(git config --global user.email)" ]; then
-    print_info "Setting up Git configuration..."
-    git config --global user.email "sandbox@claude.local"
-    git config --global user.name "Sandbox Claude"
-    git config --global init.defaultBranch main
-fi
-
 # Check workspace
 if [ -d "/workspace" ]; then
     cd /workspace
     print_success "Workspace mounted at /workspace"
     
-    # Check if it's a git repository
-    if [ -d ".git" ]; then
+    # Check if it's a git worktree (when .git is a file)
+    if [ -f ".git" ]; then
+        print_info "Git worktree detected"
+        
+        # Check if main git directory was mounted
+        if [ -d "/workspace/.git_main" ]; then
+            # Read the original .git file to get the worktree path
+            ORIG_GITDIR=$(cat .git | sed 's/gitdir: //')
+            
+            # Calculate the relative path from workspace to the worktree within .git_main
+            WORKTREE_NAME=$(basename "$ORIG_GITDIR")
+            
+            # Update the .git file to point to the mounted location
+            echo "gitdir: /workspace/.git_main/worktrees/$WORKTREE_NAME" > .git
+            
+            print_success "Git worktree configuration updated"
+            echo "  Git repository (worktree) detected:"
+            echo "    • Branch: $(git branch --show-current 2>/dev/null || echo 'detached')"
+            echo "    • Status: $(git status --porcelain 2>/dev/null | wc -l) modified files"
+        else
+            print_error "Main git directory not mounted - git operations may fail"
+        fi
+    # Check if it's a regular git repository
+    elif [ -d ".git" ]; then
         echo "  Git repository detected:"
         echo "    • Branch: $(git branch --show-current 2>/dev/null || echo 'detached')"
-        echo "    • Status: $(git status --porcelain | wc -l) modified files"
+        echo "    • Status: $(git status --porcelain 2>/dev/null | wc -l) modified files"
     fi
     
     # Check for project files
@@ -153,6 +167,14 @@ if [ -d "/workspace" ]; then
     fi
 else
     print_error "Workspace directory not found"
+fi
+
+# Initialize git config if not set (do this after workspace setup)
+if [ -z "$(git config --global user.email 2>/dev/null)" ]; then
+    print_info "Setting up Git configuration..."
+    git config --global user.email "hiteshyadav04@gmail.com"
+    git config --global user.name "Hitesh Yadav"
+    git config --global init.defaultBranch main
 fi
 
 echo ""

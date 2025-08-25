@@ -16,7 +16,7 @@ from rich.table import Table
 from .config_sync import ConfigSync
 from .container_manager import ContainerManager
 from .session_store import SessionStore
-from .utils import format_timestamp, generate_container_name, validate_name
+from .utils import format_timestamp, generate_container_name, get_git_worktree_info, validate_name
 
 console = Console()
 manager = ContainerManager()
@@ -26,13 +26,26 @@ config_sync = ConfigSync()
 
 def _prepare_mounts(no_mount_config: bool) -> dict[str, dict[str, Any]]:
     """Prepare mount configurations for container."""
+    current_dir = Path(os.getcwd())
+    
     mounts: dict[str, dict[str, Any]] = {
         "workspace": {
-            "source": os.getcwd(),
+            "source": str(current_dir),
             "target": "/workspace",
             "type": "bind",
         }
     }
+    
+    # Check if we're in a git worktree and need to mount the main git directory
+    is_worktree, main_git_dir = get_git_worktree_info(current_dir)
+    if is_worktree and main_git_dir:
+        # Mount the main .git directory
+        mounts["main_git"] = {
+            "source": str(main_git_dir),
+            "target": "/workspace/.git_main",
+            "type": "bind",
+        }
+        console.print("[dim]Detected git worktree, mounting main repository[/dim]")
 
     if not no_mount_config:
         claude_config = Path.home() / ".claude"
