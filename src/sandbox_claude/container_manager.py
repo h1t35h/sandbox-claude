@@ -110,7 +110,7 @@ class ContainerManager:
                 environment=environment or {},
                 ports=ports or {},
                 working_dir="/workspace",
-                user="root",
+                user="sandman",  # Use sandman user by default
                 hostname=name.split("-")[-1][:12],  # Use part of name as hostname
             )
 
@@ -163,8 +163,8 @@ class ContainerManager:
     def attach_to_container(self, container_id: str) -> None:
         """Attach to a running container (interactive shell)."""
         try:
-            # Use subprocess for proper TTY handling
-            subprocess.run(["docker", "exec", "-it", container_id, "/bin/bash"], check=False)
+            # Use subprocess for proper TTY handling, run as sandman user
+            subprocess.run(["docker", "exec", "-it", "-u", "sandman", container_id, "/bin/bash"], check=False)
         except Exception as e:
             print(f"Failed to attach to container: {e}")
 
@@ -172,7 +172,7 @@ class ContainerManager:
         """Execute a command in a container."""
         try:
             container = self.client.containers.get(container_id)
-            result = container.exec_run(command, demux=True)
+            result = container.exec_run(command, demux=True, user="sandman")
 
             stdout, stderr = result.output if result.output else (None, None)
 

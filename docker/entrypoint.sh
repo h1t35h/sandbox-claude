@@ -21,6 +21,7 @@ echo "════════════════════════�
 echo "     🚀 Sandbox Claude Container Environment"
 echo "════════════════════════════════════════════════════════════════"
 echo ""
+print_info "Running as user: $USER_NAME (UID: $(id -u))"
 
 # Display environment info
 print_info "Container Information:"
@@ -32,30 +33,39 @@ echo "  • Node: $(node --version)"
 echo "  • Git: $(git --version)"
 echo ""
 
+# Determine user home directory
+if [ "$(id -u)" = "0" ]; then
+    USER_HOME="/root"
+    USER_NAME="root"
+else
+    USER_HOME="/home/sandman"
+    USER_NAME="sandman"
+fi
+
 # Check and setup Claude configuration
 # Copy the host's .claude.json if it was mounted to temp location
 if [ -f "/tmp/.claude.json.host" ]; then
     # Check if there's a persisted version in workspace first
     if [ -f "/workspace/.sandbox-claude/.claude.json" ]; then
         print_info "Restoring Claude configuration from previous session"
-        cp /workspace/.sandbox-claude/.claude.json /root/.claude.json
+        cp /workspace/.sandbox-claude/.claude.json $USER_HOME/.claude.json
     else
         print_info "Copying Claude configuration from host (writable copy)"
-        cp /tmp/.claude.json.host /root/.claude.json
+        cp /tmp/.claude.json.host $USER_HOME/.claude.json
     fi
-    chmod 600 /root/.claude.json  # Secure permissions
+    chmod 600 $USER_HOME/.claude.json  # Secure permissions
     print_success "Claude configuration ready (editable)"
 elif [ -f "/workspace/.sandbox-claude/.claude.json" ]; then
     # No host config, but we have a persisted one
     print_info "Restoring Claude configuration from previous session"
-    cp /workspace/.sandbox-claude/.claude.json /root/.claude.json
-    chmod 600 /root/.claude.json
+    cp /workspace/.sandbox-claude/.claude.json $USER_HOME/.claude.json
+    chmod 600 $USER_HOME/.claude.json
     print_success "Claude configuration restored"
 else
     # No config exists, create an empty one for Claude to populate
     print_info "Creating new Claude configuration file"
-    echo '{}' > /root/.claude.json
-    chmod 600 /root/.claude.json
+    echo '{}' > $USER_HOME/.claude.json
+    chmod 600 $USER_HOME/.claude.json
     print_info "Claude will configure on first run. Remember to add your API key."
 fi
 
@@ -64,53 +74,53 @@ if [ -d "/tmp/.claude.host" ]; then
     # Copy the host's .claude directory if it was mounted to temp location
     if [ -d "/workspace/.sandbox-claude/.claude" ]; then
         print_info "Restoring .claude directory from previous session"
-        rm -rf /root/.claude
-        cp -r /workspace/.sandbox-claude/.claude/. /root/.claude
+        rm -rf $USER_HOME/.claude
+        cp -r /workspace/.sandbox-claude/.claude/. $USER_HOME/.claude
     else
         print_info "Copying .claude directory from host (writable copy)"
-        cp -r /tmp/.claude.host/. /root/.claude
+        cp -r /tmp/.claude.host/. $USER_HOME/.claude
     fi
-    chmod -R 700 /root/.claude  # Secure permissions
+    chmod -R 700 $USER_HOME/.claude  # Secure permissions
     print_success "Claude directory ready (editable)"
     # List configuration files
-    if [ "$(ls -A /root/.claude 2>/dev/null)" ]; then
+    if [ "$(ls -A $USER_HOME/.claude 2>/dev/null)" ]; then
         echo "  Configuration files:"
-        ls -la /root/.claude | grep -E "^-" | awk '{print "    • " $9}'
+        ls -la $USER_HOME/.claude | grep -E "^-" | awk '{print "    • " $9}'
     fi
 elif [ -d "/workspace/.sandbox-claude/.claude" ]; then
     # No host config, but we have a persisted one
     print_info "Restoring .claude directory from previous session"
-    cp -r /workspace/.sandbox-claude/.claude/. /root/.claude
-    chmod -R 700 /root/.claude
+    cp -r /workspace/.sandbox-claude/.claude/. $USER_HOME/.claude
+    chmod -R 700 $USER_HOME/.claude
     print_success "Claude directory restored"
 else
     # Create empty .claude directory
     print_info "Creating new .claude directory"
-    mkdir -p /root/.claude
-    chmod 700 /root/.claude
+    mkdir -p $USER_HOME/.claude
+    chmod 700 $USER_HOME/.claude
 fi
 
 # Check and setup credentials file
 if [ -f "/tmp/.claude_creds.json.host" ]; then
     # Ensure .claude directory exists
-    mkdir -p /root/.claude
+    mkdir -p $USER_HOME/.claude
     
     # Check if there's a persisted version in workspace first
     if [ -f "/workspace/.sandbox-claude/.credentials.json" ]; then
         print_info "Restoring credentials from previous session"
-        cp /workspace/.sandbox-claude/.credentials.json /root/.claude/.credentials.json
+        cp /workspace/.sandbox-claude/.credentials.json $USER_HOME/.claude/.credentials.json
     else
         print_info "Copying credentials from host (writable copy)"
-        cp /tmp/.claude_creds.json.host /root/.claude/.credentials.json
+        cp /tmp/.claude_creds.json.host $USER_HOME/.claude/.credentials.json
     fi
-    chmod 600 /root/.claude/.credentials.json  # Secure permissions
+    chmod 600 $USER_HOME/.claude/.credentials.json  # Secure permissions
     print_success "Claude credentials ready (.credentials.json)"
 elif [ -f "/workspace/.sandbox-claude/.credentials.json" ]; then
     # No host creds, but we have a persisted one
-    mkdir -p /root/.claude
+    mkdir -p $USER_HOME/.claude
     print_info "Restoring credentials from previous session"
-    cp /workspace/.sandbox-claude/.credentials.json /root/.claude/.credentials.json
-    chmod 600 /root/.claude/.credentials.json
+    cp /workspace/.sandbox-claude/.credentials.json $USER_HOME/.claude/.credentials.json
+    chmod 600 $USER_HOME/.claude/.credentials.json
     print_success "Claude credentials restored"
 fi
 
@@ -167,6 +177,7 @@ export HISTCONTROL=ignoreboth:erasedups
 alias sandbox-info='cat /tmp/.sandbox_session'
 alias sandbox-update='apt-get update && apt-get upgrade -y'
 alias sandbox-install='apt-get install -y'
+alias claude='claude --dangerously-skip-permissions'
 
 # Function to persist Claude configuration
 persist_claude_config() {
@@ -174,21 +185,21 @@ persist_claude_config() {
         mkdir -p /workspace/.sandbox-claude
         
         # Save .claude.json if it exists
-        if [ -f "/root/.claude.json" ]; then
-            cp /root/.claude.json /workspace/.sandbox-claude/.claude.json
+        if [ -f "$USER_HOME/.claude.json" ]; then
+            cp $USER_HOME/.claude.json /workspace/.sandbox-claude/.claude.json
             echo "[INFO] Claude configuration (.claude.json) saved for next session" >&2
         fi
         
         # Save .claude directory if it exists
-        if [ -d "/root/.claude" ]; then
+        if [ -d "$USER_HOME/.claude" ]; then
             rm -rf /workspace/.sandbox-claude/.claude
-            cp -r /root/.claude/. /workspace/.sandbox-claude/.claude
+            cp -r $USER_HOME/.claude/. /workspace/.sandbox-claude/.claude
             echo "[INFO] Claude directory (.claude/) saved for next session" >&2
         fi
         
         # Save credentials file if it exists
-        if [ -f "/root/.claude/.credentials.json" ]; then
-            cp /root/.claude/.credentials.json /workspace/.sandbox-claude/.credentials.json
+        if [ -f "$USER_HOME/.claude/.credentials.json" ]; then
+            cp $USER_HOME/.claude/.credentials.json /workspace/.sandbox-claude/.credentials.json
             echo "[INFO] Claude credentials (.credentials.json) saved for next session" >&2
         fi
     fi

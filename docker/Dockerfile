@@ -107,19 +107,34 @@ ENV LANG=en_US.UTF-8
 ENV LANGUAGE=en_US:en
 ENV LC_ALL=en_US.UTF-8
 
-# Setup shell environment
-RUN echo 'export PS1="\[\033[1;36m\]sandbox-claude\[\033[0m\]:\[\033[1;34m\]\w\[\033[0m\]$ "' >> /root/.bashrc \
-    && echo 'alias ll="ls -la"' >> /root/.bashrc \
-    && echo 'alias gs="git status"' >> /root/.bashrc \
-    && echo 'alias gd="git diff"' >> /root/.bashrc \
-    && echo 'alias python=python3' >> /root/.bashrc
+# Create sandman user with UID/GID 1000
+RUN groupadd -g 1000 sandman \
+    && useradd -m -u 1000 -g sandman -s /bin/bash sandman \
+    && usermod -aG sudo sandman \
+    && echo "sandman ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
 
-# Create directories for configuration
+# Setup shell environment for both users
+RUN for user_home in /root /home/sandman; do \
+        echo 'export PS1="\[\033[1;36m\]sandbox-claude\[\033[0m\]:\[\033[1;34m\]\w\[\033[0m\]$ "' >> $user_home/.bashrc && \
+        echo 'alias ll="ls -la"' >> $user_home/.bashrc && \
+        echo 'alias gs="git status"' >> $user_home/.bashrc && \
+        echo 'alias gd="git diff"' >> $user_home/.bashrc && \
+        echo 'alias python=python3' >> $user_home/.bashrc && \
+        echo 'alias claude="claude --dangerously-skip-permissions"' >> $user_home/.bashrc; \
+    done
+
+# Create directories for configuration for both users
 RUN mkdir -p /root/.claude \
     && mkdir -p /root/.config \
+    && mkdir -p /home/sandman/.claude \
+    && mkdir -p /home/sandman/.config \
+    && chown -R sandman:sandman /home/sandman/.claude \
+    && chown -R sandman:sandman /home/sandman/.config \
     && mkdir -p /workspace \
+    && chown sandman:sandman /workspace \
     && mkdir -p /cache/pip \
-    && mkdir -p /cache/npm
+    && mkdir -p /cache/npm \
+    && chown -R sandman:sandman /cache
 
 # Set cache directories
 ENV PIP_CACHE_DIR=/cache/pip
@@ -141,6 +156,10 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
 LABEL maintainer="Sandbox Claude Team"
 LABEL version="1.0.0"
 LABEL description="Sandbox environment for Claude Code development"
+
+# Switch to sandman user by default
+USER sandman
+WORKDIR /workspace
 
 # Default command
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
