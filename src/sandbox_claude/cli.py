@@ -27,7 +27,7 @@ config_sync = ConfigSync()
 def _prepare_mounts(no_mount_config: bool) -> dict[str, dict[str, Any]]:
     """Prepare mount configurations for container."""
     current_dir = Path(os.getcwd())
-    
+
     mounts: dict[str, dict[str, Any]] = {
         "workspace": {
             "source": str(current_dir),
@@ -35,7 +35,7 @@ def _prepare_mounts(no_mount_config: bool) -> dict[str, dict[str, Any]]:
             "type": "bind",
         }
     }
-    
+
     # Check if we're in a git worktree and need to mount the main git directory
     is_worktree, main_git_dir = get_git_worktree_info(current_dir)
     if is_worktree and main_git_dir:
@@ -48,10 +48,25 @@ def _prepare_mounts(no_mount_config: bool) -> dict[str, dict[str, Any]]:
         console.print("[dim]Detected git worktree, mounting main repository[/dim]")
 
     if not no_mount_config:
+        # Create a shared config directory that's writable
+        shared_config_dir = Path("/tmp/csandbox/.claude")
+        shared_config_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Mount the shared config directory as writable
+        mounts["shared_config"] = {
+            "source": str(shared_config_dir),
+            "target": "/host-claude-config",
+            "type": "bind",
+            "read_only": False,  # Writable mount for syncing back
+        }
+        
         claude_config = Path.home() / ".claude"
         claude_json = Path.home() / ".claude.json"
-        claude_creds = Path.home() / ".claude_creds.json"
+        # Check for credentials in both old and new locations
+        claude_creds_old = Path.home() / ".claude_creds.json"
+        claude_creds_new = Path.home() / ".claude" / ".credentials.json"
 
+        # Also mount original configs as read-only for initial copy
         if claude_config.exists():
             mounts["claude_config"] = {
                 "source": str(claude_config),
@@ -68,9 +83,17 @@ def _prepare_mounts(no_mount_config: bool) -> dict[str, dict[str, Any]]:
                 "read_only": True,
             }
 
-        if claude_creds.exists():
+        # Mount credentials file from either location
+        if claude_creds_new.exists():
             mounts["claude_creds"] = {
-                "source": str(claude_creds),
+                "source": str(claude_creds_new),
+                "target": "/tmp/.claude_creds.json.host",
+                "type": "bind",
+                "read_only": True,
+            }
+        elif claude_creds_old.exists():
+            mounts["claude_creds"] = {
+                "source": str(claude_creds_old),
                 "target": "/tmp/.claude_creds.json.host",
                 "type": "bind",
                 "read_only": True,

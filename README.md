@@ -121,7 +121,8 @@ Each sandbox container comes pre-configured with:
 
 ### Environment
 - Working directory: `/workspace` (your mounted project)
-- Home directory: `/root` with Claude configs
+- User: `sandman` (UID/GID 1000) for enhanced security
+- Home directory: `/home/sandman` with Claude configs
 - Cache directories for pip and npm
 - Locale: en_US.UTF-8
 
@@ -187,6 +188,7 @@ The tool intelligently handles Claude configuration:
 - **Host Protection**: Original host files remain untouched (mounted read-only to temp locations)
 - **Session Persistence**: Changes are saved to `/workspace/.sandbox-claude/` for next session
 - **Secure**: Configuration files have proper permissions (600 for files, 700 for directories)
+- **Config Sync Back**: New sync commands to save updated credentials back to host
 
 Configuration files handled:
 - `~/.claude.json` → Copied to container's `~/.claude.json`
@@ -202,6 +204,68 @@ Configuration behavior:
 To skip mounting configuration:
 ```bash
 sandbox-claude new -p project -f feature --no-mount-config
+```
+
+#### Bi-directional Config Sync
+
+The tool supports both pushing configs to the host and pulling configs from the host:
+
+**Push to Host (Save Updated Credentials):**
+```bash
+# Inside the container, after credentials expire:
+claude login  # Follow the prompts to authenticate
+
+# Then sync the updated credentials back to host:
+claude-sync   # or use aliases: claude-save, sync-claude
+
+# Alternative: Login and sync in one command:
+claude-login  # Automatically syncs after successful login
+```
+
+**Pull from Host (Refresh Credentials):**
+```bash
+# Inside the container, to refresh with latest host configs:
+claude-pull   # or use aliases: claude-refresh, pull-claude
+
+# This pulls configs from (in priority order):
+# 1. /tmp/csandbox/.claude/ (shared directory)
+# 2. Original host mount points
+# 3. Workspace backup
+```
+
+**How it works:**
+1. **Push (claude-sync)**: Saves to `/tmp/csandbox/.claude/` on host
+2. **Pull (claude-pull)**: Loads from host into current container
+3. **Auto-load**: New containers automatically load from `/tmp/csandbox/.claude/`
+4. **Workspace backup**: Always maintains backup in `/workspace/.sandbox-claude/`
+
+**Common Scenarios:**
+```bash
+# Scenario 1: Credentials expired in current container
+claude-login  # Login and auto-sync to host
+
+# Scenario 2: Updated credentials elsewhere, need them in current container
+claude-pull   # Pull latest from host
+
+# Scenario 3: Manual sync from host side
+# Exit container first, then from workspace:
+./sync-to-host.sh  # Copies to ~/.claude/
+```
+
+## Git Worktree Support
+
+The tool automatically detects and handles git worktrees:
+
+```bash
+# When you're in a git worktree directory
+cd /path/to/worktree
+sandbox-claude new -p myproject -f worktree-feature
+
+# The tool will:
+# 1. Detect the worktree configuration
+# 2. Mount the main git directory to /workspace/.git_main
+# 3. Update the worktree configuration inside the container
+# 4. Allow full git operations within the worktree
 ```
 
 ## Docker Image
@@ -231,6 +295,24 @@ docker build -t sandbox-claude-base:latest -f docker/Dockerfile docker/
 
 ```bash
 sandbox-claude new -p project -f feature --image my-custom-image:latest
+```
+
+### Docker Compose Support
+
+You can also use Docker Compose for more complex setups. See `docker-compose.example.yml` for a complete example:
+
+```bash
+# Copy the example file
+cp docker-compose.example.yml docker-compose.yml
+
+# Edit to customize your setup
+vim docker-compose.yml
+
+# Start the container
+docker-compose up -d
+
+# Enter the container
+docker-compose exec sandbox-claude bash
 ```
 
 ## Session Management

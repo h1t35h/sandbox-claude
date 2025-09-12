@@ -16,11 +16,20 @@ print_error() {
     echo -e "\033[1;31m[ERROR]\033[0m $1"
 }
 
+print_warning() {
+    echo -e "\033[1;33m[WARNING]\033[0m $1"
+}
+
 # Welcome message
 echo "════════════════════════════════════════════════════════════════"
 echo "     🚀 Sandbox Claude Container Environment"
 echo "════════════════════════════════════════════════════════════════"
 echo ""
+# Set Claude config directory (can be overridden by environment)
+# Default to /claude-config which should be mounted from host's /tmp/csandbox/.claude
+CLAUDE_CONFIG_DIR=${CLAUDE_CONFIG_DIR:-/claude-config}
+export CLAUDE_CONFIG_DIR
+
 print_info "Running as user: $USER_NAME (UID: $(id -u))"
 
 # Display environment info
@@ -42,86 +51,122 @@ else
     USER_NAME="sandman"
 fi
 
-# Check and setup Claude configuration
-# Copy the host's .claude.json if it was mounted to temp location
-if [ -f "/tmp/.claude.json.host" ]; then
-    # Check if there's a persisted version in workspace first
-    if [ -f "/workspace/.sandbox-claude/.claude.json" ]; then
-        print_info "Restoring Claude configuration from previous session"
-        cp /workspace/.sandbox-claude/.claude.json $USER_HOME/.claude.json
+# Check if Claude config directory is mounted and writable
+if [ -d "$CLAUDE_CONFIG_DIR" ] && [ -w "$CLAUDE_CONFIG_DIR" ]; then
+    print_success "Claude config directory mounted at: $CLAUDE_CONFIG_DIR"
+    CONFIG_MODE="mounted"
+elif [ -d "$CLAUDE_CONFIG_DIR" ]; then
+    # Directory exists but might not be writable, try to fix permissions
+    if [ "$(id -u)" = "0" ]; then
+        # Running as root, can fix permissions
+        chown sandman:sandman "$CLAUDE_CONFIG_DIR"
+        chmod 755 "$CLAUDE_CONFIG_DIR"
+        print_info "Fixed permissions for Claude config directory: $CLAUDE_CONFIG_DIR"
+        CONFIG_MODE="mounted"
     else
-        print_info "Copying Claude configuration from host (writable copy)"
-        cp /tmp/.claude.json.host $USER_HOME/.claude.json
+        # Running as sandman, check if we own it
+        if [ "$(stat -c %u $CLAUDE_CONFIG_DIR)" = "$(id -u)" ]; then
+            chmod 755 "$CLAUDE_CONFIG_DIR"
+            CONFIG_MODE="mounted"
+        else
+            print_error "Claude config directory exists but is not writable: $CLAUDE_CONFIG_DIR"
+            print_info "Falling back to workspace-based config"
+            CLAUDE_CONFIG_DIR="/workspace/.claude-config"
+            export CLAUDE_CONFIG_DIR
+            CONFIG_MODE="workspace"
+        fi
     fi
-    chmod 600 $USER_HOME/.claude.json  # Secure permissions
-    print_success "Claude configuration ready (editable)"
-elif [ -f "/workspace/.sandbox-claude/.claude.json" ]; then
-    # No host config, but we have a persisted one
-    print_info "Restoring Claude configuration from previous session"
-    cp /workspace/.sandbox-claude/.claude.json $USER_HOME/.claude.json
-    chmod 600 $USER_HOME/.claude.json
-    print_success "Claude configuration restored"
 else
-    # No config exists, create an empty one for Claude to populate
-    print_info "Creating new Claude configuration file"
-    echo '{}' > $USER_HOME/.claude.json
-    chmod 600 $USER_HOME/.claude.json
-    print_info "Claude will configure on first run. Remember to add your API key."
+    print_info "Claude config directory not mounted, using workspace-based config"
+    CLAUDE_CONFIG_DIR="/workspace/.claude-config"
+    export CLAUDE_CONFIG_DIR
+    CONFIG_MODE="workspace"
 fi
 
-# Check and setup .claude directory
-if [ -d "/tmp/.claude.host" ]; then
-    # Copy the host's .claude directory if it was mounted to temp location
-    if [ -d "/workspace/.sandbox-claude/.claude" ]; then
-        print_info "Restoring .claude directory from previous session"
-        rm -rf $USER_HOME/.claude
-        cp -r /workspace/.sandbox-claude/.claude/. $USER_HOME/.claude
-    else
-        print_info "Copying .claude directory from host (writable copy)"
-        cp -r /tmp/.claude.host/. $USER_HOME/.claude
-    fi
-    chmod -R 700 $USER_HOME/.claude  # Secure permissions
-    print_success "Claude directory ready (editable)"
-    # List configuration files
-    if [ "$(ls -A $USER_HOME/.claude 2>/dev/null)" ]; then
-        echo "  Configuration files:"
-        ls -la $USER_HOME/.claude | grep -E "^-" | awk '{print "    • " $9}'
-    fi
-elif [ -d "/workspace/.sandbox-claude/.claude" ]; then
-    # No host config, but we have a persisted one
-    print_info "Restoring .claude directory from previous session"
-    cp -r /workspace/.sandbox-claude/.claude/. $USER_HOME/.claude
-    chmod -R 700 $USER_HOME/.claude
-    print_success "Claude directory restored"
-else
-    # Create empty .claude directory
-    print_info "Creating new .claude directory"
-    mkdir -p $USER_HOME/.claude
-    chmod 700 $USER_HOME/.claude
+# Ensure Claude config directory exists and has proper permissions
+if [ "$CONFIG_MODE" = "workspace" ]; then
+    mkdir -p "$CLAUDE_CONFIG_DIR"
+    chown $(id -u):$(id -g) "$CLAUDE_CONFIG_DIR"
+    chmod 755 "$CLAUDE_CONFIG_DIR"
 fi
 
-# Check and setup credentials file
-if [ -f "/tmp/.claude_creds.json.host" ]; then
-    # Ensure .claude directory exists
-    mkdir -p $USER_HOME/.claude
+# Check and setup Claude configuration using CLAUDE_CONFIG_DIR
+# The Claude CLI will look for configs in $CLAUDE_CONFIG_DIR
+print_info "Claude config directory: $CLAUDE_CONFIG_DIR (mode: $CONFIG_MODE)"
+
+# First, check if there's a shared host config directory with updated configs
+if [ -d "/host-claude-config" ] && [ -r "/host-claude-config" ]; then
+    print_info "Checking shared host config directory for updates..."
     
-    # Check if there's a persisted version in workspace first
-    if [ -f "/workspace/.sandbox-claude/.credentials.json" ]; then
-        print_info "Restoring credentials from previous session"
-        cp /workspace/.sandbox-claude/.credentials.json $USER_HOME/.claude/.credentials.json
-    else
-        print_info "Copying credentials from host (writable copy)"
-        cp /tmp/.claude_creds.json.host $USER_HOME/.claude/.credentials.json
+    # Copy any existing configs from the shared directory first (these are most recent)
+    if [ -f "/host-claude-config/.claude.json" ]; then
+        cp "/host-claude-config/.claude.json" "$CLAUDE_CONFIG_DIR/.claude.json"
+        chmod 600 "$CLAUDE_CONFIG_DIR/.claude.json"
+        print_success "Loaded .claude.json from shared host directory"
     fi
-    chmod 600 $USER_HOME/.claude/.credentials.json  # Secure permissions
-    print_success "Claude credentials ready (.credentials.json)"
-elif [ -f "/workspace/.sandbox-claude/.credentials.json" ]; then
-    # No host creds, but we have a persisted one
-    mkdir -p $USER_HOME/.claude
-    print_info "Restoring credentials from previous session"
-    cp /workspace/.sandbox-claude/.credentials.json $USER_HOME/.claude/.credentials.json
-    chmod 600 $USER_HOME/.claude/.credentials.json
-    print_success "Claude credentials restored"
+    
+    if [ -f "/host-claude-config/.credentials.json" ]; then
+        cp "/host-claude-config/.credentials.json" "$CLAUDE_CONFIG_DIR/.credentials.json"
+        chmod 600 "$CLAUDE_CONFIG_DIR/.credentials.json"
+        print_success "Loaded .credentials.json from shared host directory"
+    fi
+    
+    if [ -f "/host-claude-config/CLAUDE.md" ]; then
+        cp "/host-claude-config/CLAUDE.md" "$CLAUDE_CONFIG_DIR/CLAUDE.md"
+        chmod 644 "$CLAUDE_CONFIG_DIR/CLAUDE.md"
+        print_success "Loaded CLAUDE.md from shared host directory"
+    fi
+fi
+
+# Only copy from host mounts if config directory doesn't have files already
+if [ ! -f "$CLAUDE_CONFIG_DIR/.claude.json" ]; then
+    # Copy the host's .claude.json if it was mounted to temp location
+    if [ -f "/tmp/.claude.json.host" ]; then
+        print_info "Copying Claude configuration from host to $CLAUDE_CONFIG_DIR"
+        cp /tmp/.claude.json.host "$CLAUDE_CONFIG_DIR/.claude.json"
+        chmod 600 "$CLAUDE_CONFIG_DIR/.claude.json"  # Secure permissions
+        print_success "Claude configuration copied from host"
+    else
+        # No config exists, create an empty one for Claude to populate
+        print_info "Creating new Claude configuration file at $CLAUDE_CONFIG_DIR"
+        echo '{}' > "$CLAUDE_CONFIG_DIR/.claude.json"
+        chmod 600 "$CLAUDE_CONFIG_DIR/.claude.json"
+        print_info "Claude will configure on first run. Remember to add your API key."
+    fi
+else
+    print_success "Using existing Claude configuration from $CLAUDE_CONFIG_DIR"
+fi
+
+# Check and setup .claude directory contents in CLAUDE_CONFIG_DIR
+# Only copy from host if we don't have existing files
+if [ ! -f "$CLAUDE_CONFIG_DIR/.credentials.json" ] && [ ! -f "$CLAUDE_CONFIG_DIR/CLAUDE.md" ]; then
+    if [ -d "/tmp/.claude.host" ]; then
+        print_info "Copying .claude directory contents from host to $CLAUDE_CONFIG_DIR"
+        # Copy all files from host's .claude directory to CLAUDE_CONFIG_DIR
+        cp -r /tmp/.claude.host/. "$CLAUDE_CONFIG_DIR/"
+        chmod -R 700 "$CLAUDE_CONFIG_DIR"  # Secure permissions
+        print_success "Claude directory contents copied from host"
+    fi
+fi
+
+# List configuration files if any exist
+if [ "$(ls -A $CLAUDE_CONFIG_DIR 2>/dev/null)" ]; then
+    echo "  Configuration files:"
+    ls -la "$CLAUDE_CONFIG_DIR" | grep -E "^-" | awk '{print "    • " $9}'
+fi
+
+# Check and setup credentials file in CLAUDE_CONFIG_DIR
+if [ ! -f "$CLAUDE_CONFIG_DIR/.credentials.json" ]; then
+    if [ -f "/tmp/.claude_creds.json.host" ]; then
+        print_info "Copying credentials from host to $CLAUDE_CONFIG_DIR"
+        cp /tmp/.claude_creds.json.host "$CLAUDE_CONFIG_DIR/.credentials.json"
+        chmod 600 "$CLAUDE_CONFIG_DIR/.credentials.json"  # Secure permissions
+        print_success "Claude credentials copied from host"
+    else
+        print_info "No credentials file found. Claude will prompt for authentication on first use."
+    fi
+else
+    print_success "Using existing credentials from $CLAUDE_CONFIG_DIR"
 fi
 
 # Check workspace
@@ -133,23 +178,69 @@ if [ -d "/workspace" ]; then
     if [ -f ".git" ]; then
         print_info "Git worktree detected"
         
+        # Save the original .git content
+        ORIG_GIT_CONTENT=$(cat .git)
+        
         # Check if main git directory was mounted
         if [ -d "/workspace/.git_main" ]; then
             # Read the original .git file to get the worktree path
-            ORIG_GITDIR=$(cat .git | sed 's/gitdir: //')
+            ORIG_GITDIR=$(echo "$ORIG_GIT_CONTENT" | sed 's/gitdir: //')
             
-            # Calculate the relative path from workspace to the worktree within .git_main
+            # Extract just the worktree directory name (last component)
             WORKTREE_NAME=$(basename "$ORIG_GITDIR")
             
-            # Update the .git file to point to the mounted location
-            echo "gitdir: /workspace/.git_main/worktrees/$WORKTREE_NAME" > .git
+            # Check if the worktree directory exists in the mounted git directory
+            if [ -d "/workspace/.git_main/worktrees/$WORKTREE_NAME" ]; then
+                # Update the .git file to point to the mounted location
+                echo "gitdir: /workspace/.git_main/worktrees/$WORKTREE_NAME" > .git
+                print_success "Git worktree configuration updated"
+            else
+                # Try to find the correct worktree directory
+                print_info "Looking for worktree in mounted git directory..."
+                if [ -d "/workspace/.git_main/worktrees" ]; then
+                    # List available worktrees
+                    AVAILABLE_WORKTREES=$(ls -1 /workspace/.git_main/worktrees 2>/dev/null | head -n 1)
+                    if [ -n "$AVAILABLE_WORKTREES" ]; then
+                        echo "gitdir: /workspace/.git_main/worktrees/$AVAILABLE_WORKTREES" > .git
+                        print_success "Git worktree configuration updated (using: $AVAILABLE_WORKTREES)"
+                    else
+                        print_warning "No worktrees found in mounted git directory"
+                        print_info "Converting to standalone git repository"
+                        # Convert to a standalone repository
+                        rm -f .git
+                        git init
+                        git add .
+                    fi
+                else
+                    print_warning "Worktrees directory not found in mounted git"
+                    print_info "Converting to standalone git repository"
+                    # Convert to a standalone repository
+                    rm -f .git
+                    git init
+                    git add .
+                fi
+            fi
             
-            print_success "Git worktree configuration updated"
-            echo "  Git repository (worktree) detected:"
-            echo "    • Branch: $(git branch --show-current 2>/dev/null || echo 'detached')"
-            echo "    • Status: $(git status --porcelain 2>/dev/null | wc -l) modified files"
+            # Try to show git status
+            if git status >/dev/null 2>&1; then
+                echo "  Git repository (worktree) detected:"
+                echo "    • Branch: $(git branch --show-current 2>/dev/null || echo 'detached')"
+                echo "    • Status: $(git status --porcelain 2>/dev/null | wc -l) modified files"
+            else
+                print_warning "Git status check failed - reinitializing as standalone repository"
+                rm -f .git
+                git init
+                git add .
+                echo "  Git repository initialized (standalone)"
+            fi
         else
-            print_error "Main git directory not mounted - git operations may fail"
+            print_warning "Main git directory not mounted for worktree"
+            print_info "Converting to standalone git repository"
+            # Convert to a standalone repository to avoid errors
+            rm -f .git
+            git init
+            git add .
+            echo "  Git repository initialized (standalone)"
         fi
     # Check if it's a regular git repository
     elif [ -d ".git" ]; then
@@ -170,11 +261,13 @@ else
 fi
 
 # Initialize git config if not set (do this after workspace setup)
-if [ -z "$(git config --global user.email 2>/dev/null)" ]; then
-    print_info "Setting up Git configuration..."
-    git config --global user.email "hiteshyadav04@gmail.com"
-    git config --global user.name "Hitesh Yadav"
-    git config --global init.defaultBranch main
+# Use --global flag to avoid repository-specific errors
+if ! git config --global user.email >/dev/null 2>&1; then
+    print_info "Setting up Git global configuration..."
+    git config --global user.email "sandbox@claude.local" 2>/dev/null || true
+    git config --global user.name "Sandbox Claude" 2>/dev/null || true
+    git config --global init.defaultBranch main 2>/dev/null || true
+    git config --global safe.directory /workspace 2>/dev/null || true
 fi
 
 echo ""
@@ -199,42 +292,42 @@ export HISTCONTROL=ignoreboth:erasedups
 alias sandbox-info='cat /tmp/.sandbox_session'
 alias sandbox-update='apt-get update && apt-get upgrade -y'
 alias sandbox-install='apt-get install -y'
-alias claude='claude --dangerously-skip-permissions'
+# Claude command will use CLAUDE_CONFIG_DIR environment variable
+alias claude='CLAUDE_CONFIG_DIR=$CLAUDE_CONFIG_DIR claude --dangerously-skip-permissions'
+# Sync Claude configuration back to host
+alias claude-sync='/usr/local/bin/sync-claude-config.sh'
+alias sync-claude='/usr/local/bin/sync-claude-config.sh'
+alias claude-save='/usr/local/bin/sync-claude-config.sh'
+# Pull Claude configuration from host
+alias claude-pull='/usr/local/bin/pull-claude-config.sh'
+alias pull-claude='/usr/local/bin/pull-claude-config.sh'
+alias claude-refresh='/usr/local/bin/pull-claude-config.sh'
 
-# Function to persist Claude configuration
-persist_claude_config() {
-    if [ -d "/workspace" ]; then
-        mkdir -p /workspace/.sandbox-claude
-        
-        # Save .claude.json if it exists
-        if [ -f "$USER_HOME/.claude.json" ]; then
-            cp $USER_HOME/.claude.json /workspace/.sandbox-claude/.claude.json
-            echo "[INFO] Claude configuration (.claude.json) saved for next session" >&2
-        fi
-        
-        # Save .claude directory if it exists
-        if [ -d "$USER_HOME/.claude" ]; then
-            rm -rf /workspace/.sandbox-claude/.claude
-            cp -r $USER_HOME/.claude/. /workspace/.sandbox-claude/.claude
-            echo "[INFO] Claude directory (.claude/) saved for next session" >&2
-        fi
-        
-        # Save credentials file if it exists
-        if [ -f "$USER_HOME/.claude/.credentials.json" ]; then
-            cp $USER_HOME/.claude/.credentials.json /workspace/.sandbox-claude/.credentials.json
-            echo "[INFO] Claude credentials (.credentials.json) saved for next session" >&2
-        fi
+# Function to show Claude config status
+show_claude_config() {
+    echo "[INFO] Claude configuration directory: $CLAUDE_CONFIG_DIR" >&2
+    echo "[INFO] Config mode: $CONFIG_MODE" >&2
+    if [ -f "$CLAUDE_CONFIG_DIR/.claude.json" ]; then
+        echo "  • .claude.json exists" >&2
+    fi
+    if [ -f "$CLAUDE_CONFIG_DIR/.credentials.json" ]; then
+        echo "  • .credentials.json exists" >&2
+    fi
+    if [ -f "$CLAUDE_CONFIG_DIR/CLAUDE.md" ]; then
+        echo "  • CLAUDE.md exists" >&2
+    fi
+    if [ "$CONFIG_MODE" = "mounted" ]; then
+        echo "[INFO] Configuration shared across containers (mounted volume)" >&2
+    else
+        echo "[INFO] Configuration stored in workspace (container-specific)" >&2
     fi
 }
 
 # Export function so it's available in subshells
-export -f persist_claude_config
+export -f show_claude_config
 
-# Set up trap to persist config on exit (for interactive sessions)
-trap persist_claude_config EXIT
-
-# Also add an alias for manual save
-alias save-claude-config='persist_claude_config'
+# Also add an alias for checking config
+alias claude-config-status='show_claude_config'
 
 # Function to check Claude Code status
 check_claude() {
@@ -252,6 +345,19 @@ check_claude() {
 # Run Claude check
 check_claude
 
+echo ""
+echo "────────────────────────────────────────────────────────────────"
+echo "Claude Configuration Commands:"
+echo "  Push to host:"
+echo "    • claude-sync   - Sync updated configs back to host"
+echo "    • claude-save   - Same as claude-sync"
+echo "    • claude-login  - Login to Claude and auto-sync"
+echo "  Pull from host:"
+echo "    • claude-pull   - Pull latest configs from host"
+echo "    • claude-refresh - Same as claude-pull"
+echo ""
+print_info "Use 'claude-pull' to refresh configs, 'claude-sync' to save them"
+echo "────────────────────────────────────────────────────────────────"
 echo ""
 print_success "Container ready! Type 'exit' to leave the sandbox."
 echo "════════════════════════════════════════════════════════════════"

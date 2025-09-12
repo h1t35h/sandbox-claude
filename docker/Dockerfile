@@ -116,11 +116,19 @@ RUN groupadd -g 1000 sandman \
 # Setup shell environment for both users
 RUN for user_home in /root /home/sandman; do \
         echo 'export PS1="\[\033[1;36m\]sandbox-claude\[\033[0m\]:\[\033[1;34m\]\w\[\033[0m\]$ "' >> $user_home/.bashrc && \
+        echo 'export CLAUDE_CONFIG_DIR=/claude-config' >> $user_home/.bashrc && \
         echo 'alias ll="ls -la"' >> $user_home/.bashrc && \
         echo 'alias gs="git status"' >> $user_home/.bashrc && \
         echo 'alias gd="git diff"' >> $user_home/.bashrc && \
         echo 'alias python=python3' >> $user_home/.bashrc && \
-        echo 'alias claude="claude --dangerously-skip-permissions"' >> $user_home/.bashrc; \
+        echo 'alias claude="claude --dangerously-skip-permissions"' >> $user_home/.bashrc && \
+        echo 'alias claude-sync="/usr/local/bin/sync-claude-config.sh"' >> $user_home/.bashrc && \
+        echo 'alias sync-claude="/usr/local/bin/sync-claude-config.sh"' >> $user_home/.bashrc && \
+        echo 'alias claude-save="/usr/local/bin/sync-claude-config.sh"' >> $user_home/.bashrc && \
+        echo 'alias claude-pull="/usr/local/bin/pull-claude-config.sh"' >> $user_home/.bashrc && \
+        echo 'alias pull-claude="/usr/local/bin/pull-claude-config.sh"' >> $user_home/.bashrc && \
+        echo 'alias claude-refresh="/usr/local/bin/pull-claude-config.sh"' >> $user_home/.bashrc && \
+        echo 'alias claude-login="claude login && /usr/local/bin/sync-claude-config.sh"' >> $user_home/.bashrc; \
     done
 
 # Create directories for configuration for both users
@@ -134,15 +142,26 @@ RUN mkdir -p /root/.claude \
     && chown sandman:sandman /workspace \
     && mkdir -p /cache/pip \
     && mkdir -p /cache/npm \
-    && chown -R sandman:sandman /cache
+    && chown -R sandman:sandman /cache \
+    && mkdir -p /claude-config \
+    && chown sandman:sandman /claude-config \
+    && chmod 755 /claude-config
 
 # Set cache directories
 ENV PIP_CACHE_DIR=/cache/pip
 ENV NPM_CONFIG_CACHE=/cache/npm
 
-# Add entrypoint script
+# Set Claude config directory to a mounted location (separate from workspace)
+# This allows sharing config across different workspace containers
+ENV CLAUDE_CONFIG_DIR=/claude-config
+
+# Add entrypoint and utility scripts
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
-RUN chmod +x /usr/local/bin/entrypoint.sh
+COPY sync-claude-config.sh /usr/local/bin/sync-claude-config.sh
+COPY pull-claude-config.sh /usr/local/bin/pull-claude-config.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh \
+    && chmod +x /usr/local/bin/sync-claude-config.sh \
+    && chmod +x /usr/local/bin/pull-claude-config.sh
 
 # Create a healthcheck script
 RUN echo '#!/bin/bash\npython --version && node --version && git --version' > /usr/local/bin/healthcheck.sh \

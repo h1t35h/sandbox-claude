@@ -6,10 +6,10 @@ import re
 import secrets
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Optional, Tuple
+from typing import Any, Optional
 
 
-def get_git_worktree_info(path: Path) -> Tuple[bool, Optional[Path]]:
+def get_git_worktree_info(path: Path) -> tuple[bool, Optional[Path]]:
     """Check if a directory is a git worktree and return the main git directory.
     
     Returns:
@@ -18,23 +18,23 @@ def get_git_worktree_info(path: Path) -> Tuple[bool, Optional[Path]]:
         - main_git_dir: Path to the main git directory if it's a worktree, None otherwise
     """
     git_path = path / ".git"
-    
+
     if not git_path.exists():
         return False, None
-    
+
     # If .git is a directory, it's not a worktree
     if git_path.is_dir():
         return False, None
-    
+
     # If .git is a file, it's likely a worktree
     try:
-        with open(git_path, 'r') as f:
+        with open(git_path) as f:
             content = f.read().strip()
             # Format is usually: gitdir: /path/to/main/.git/worktrees/worktree-name
             if content.startswith("gitdir:"):
                 gitdir_path = content.split("gitdir:", 1)[1].strip()
                 gitdir = Path(gitdir_path)
-                
+
                 # The main git directory is two levels up from the worktree git directory
                 # e.g., /path/to/main/.git/worktrees/name -> /path/to/main/.git
                 if gitdir.exists() and "worktrees" in gitdir.parts:
@@ -43,10 +43,10 @@ def get_git_worktree_info(path: Path) -> Tuple[bool, Optional[Path]]:
                         if part == "worktrees" and i > 0 and gitdir.parts[i-1].endswith(".git"):
                             main_git_dir = Path(*gitdir.parts[:i])
                             return True, main_git_dir
-                            
+
     except Exception:
         pass
-    
+
     return False, None
 
 
