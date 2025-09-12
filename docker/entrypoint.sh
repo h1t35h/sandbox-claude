@@ -169,6 +169,21 @@ else
     print_success "Using existing credentials from $CLAUDE_CONFIG_DIR"
 fi
 
+# Clean up function for container exit
+cleanup_on_exit() {
+    # Clean up temporary git directories if they exist
+    if [ -d "/workspace/.git_container" ]; then
+        rm -rf /workspace/.git_container 2>/dev/null || true
+    fi
+    # Restore original .git file if we modified it
+    if [ -n "$ORIG_GIT_CONTENT" ] && [ -f "/workspace/.git" ]; then
+        echo "$ORIG_GIT_CONTENT" > /workspace/.git 2>/dev/null || true
+    fi
+}
+
+# Set up trap to clean up on exit
+trap cleanup_on_exit EXIT
+
 # Check workspace
 if [ -d "/workspace" ]; then
     cd /workspace
@@ -178,12 +193,15 @@ if [ -d "/workspace" ]; then
     if [ -f ".git" ]; then
         print_info "Git worktree detected"
         
-        # Save the original .git content
-        ORIG_GIT_CONTENT=$(cat .git)
+        # Save the original .git content (make it global for cleanup)
+        export ORIG_GIT_CONTENT=$(cat .git)
         
         # Check if main git directory was mounted (read-only)
         if [ -d "/workspace/.git_main" ]; then
             print_info "Creating container-local git metadata copy..."
+            
+            # Remove any existing .git_container first to ensure clean state
+            rm -rf /workspace/.git_container 2>/dev/null || true
             
             # Copy the read-only git metadata to a writable location
             cp -r /workspace/.git_main /workspace/.git_container 2>/dev/null || {
@@ -196,6 +214,9 @@ if [ -d "/workspace" ]; then
                 # Exit this block early
                 return 0 2>/dev/null || true
             }
+            
+            # Ensure .git_container is writable
+            chmod -R u+w /workspace/.git_container 2>/dev/null || true
             
             # Read the original .git file to get the worktree path
             ORIG_GITDIR=$(echo "$ORIG_GIT_CONTENT" | sed 's/gitdir: //')

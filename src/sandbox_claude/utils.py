@@ -40,9 +40,12 @@ def get_git_worktree_info(path: Path) -> tuple[bool, Optional[Path]]:
                 if gitdir.exists() and "worktrees" in gitdir.parts:
                     # Find the .git directory (parent of worktrees)
                     for i, part in enumerate(gitdir.parts):
-                        if part == "worktrees" and i > 0 and gitdir.parts[i-1].endswith(".git"):
-                            main_git_dir = Path(*gitdir.parts[:i])
-                            return True, main_git_dir
+                        if part == "worktrees" and i > 0:
+                            # Check if the previous part is .git (exact match) or ends with .git
+                            prev_part = gitdir.parts[i-1]
+                            if prev_part == ".git" or prev_part.endswith(".git"):
+                                main_git_dir = Path(*gitdir.parts[:i])
+                                return True, main_git_dir
 
     except Exception:
         pass

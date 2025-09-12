@@ -39,14 +39,18 @@ def _prepare_mounts(no_mount_config: bool) -> dict[str, dict[str, Any]]:
     # Check if we're in a git worktree and need to mount the main git directory
     is_worktree, main_git_dir = get_git_worktree_info(current_dir)
     if is_worktree and main_git_dir:
-        # Mount the main .git directory as READ-ONLY to prevent breaking host worktree
-        mounts["main_git"] = {
-            "source": str(main_git_dir),
-            "target": "/workspace/.git_main",
-            "type": "bind",
-            "read_only": True,  # Critical: prevent modifications to host git metadata
-        }
-        console.print("[dim]Detected git worktree, mounting main repository (read-only)[/dim]")
+        # Verify the main git directory exists and is accessible
+        if main_git_dir.exists() and main_git_dir.is_dir():
+            # Mount the main .git directory as READ-ONLY to prevent breaking host worktree
+            mounts["main_git"] = {
+                "source": str(main_git_dir),
+                "target": "/workspace/.git_main",
+                "type": "bind",
+                "read_only": True,  # Critical: prevent modifications to host git metadata
+            }
+            console.print("[dim]Detected git worktree, mounting main repository (read-only)[/dim]")
+        else:
+            console.print("[yellow]Warning: Git worktree detected but main repository not accessible[/yellow]")
 
     if not no_mount_config:
         # Create a shared config directory that's writable
