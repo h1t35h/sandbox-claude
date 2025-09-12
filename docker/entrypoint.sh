@@ -181,41 +181,63 @@ if [ -d "/workspace" ]; then
         # Save the original .git content
         ORIG_GIT_CONTENT=$(cat .git)
         
-        # Check if main git directory was mounted
+        # Check if main git directory was mounted (read-only)
         if [ -d "/workspace/.git_main" ]; then
+            print_info "Creating container-local git metadata copy..."
+            
+            # Copy the read-only git metadata to a writable location
+            cp -r /workspace/.git_main /workspace/.git_container 2>/dev/null || {
+                print_error "Failed to copy git metadata"
+                print_info "Converting to standalone git repository"
+                rm -f .git
+                git init
+                git add .
+                echo "  Git repository initialized (standalone)"
+                # Exit this block early
+                return 0 2>/dev/null || true
+            }
+            
             # Read the original .git file to get the worktree path
             ORIG_GITDIR=$(echo "$ORIG_GIT_CONTENT" | sed 's/gitdir: //')
             
             # Extract just the worktree directory name (last component)
             WORKTREE_NAME=$(basename "$ORIG_GITDIR")
             
-            # Check if the worktree directory exists in the mounted git directory
-            if [ -d "/workspace/.git_main/worktrees/$WORKTREE_NAME" ]; then
-                # Update the .git file to point to the mounted location
-                echo "gitdir: /workspace/.git_main/worktrees/$WORKTREE_NAME" > .git
-                print_success "Git worktree configuration updated"
+            # Check if the worktree directory exists in the copied git directory
+            if [ -d "/workspace/.git_container/worktrees/$WORKTREE_NAME" ]; then
+                # Update the .git file to point to the container copy
+                echo "gitdir: /workspace/.git_container/worktrees/$WORKTREE_NAME" > .git
+                
+                # Update the gitdir file in the container copy to point to container paths
+                echo "/workspace/.git" > "/workspace/.git_container/worktrees/$WORKTREE_NAME/gitdir"
+                
+                print_success "Git worktree configuration adapted for container"
             else
                 # Try to find the correct worktree directory
-                print_info "Looking for worktree in mounted git directory..."
-                if [ -d "/workspace/.git_main/worktrees" ]; then
+                print_info "Looking for worktree in copied git directory..."
+                if [ -d "/workspace/.git_container/worktrees" ]; then
                     # List available worktrees
-                    AVAILABLE_WORKTREES=$(ls -1 /workspace/.git_main/worktrees 2>/dev/null | head -n 1)
+                    AVAILABLE_WORKTREES=$(ls -1 /workspace/.git_container/worktrees 2>/dev/null | head -n 1)
                     if [ -n "$AVAILABLE_WORKTREES" ]; then
-                        echo "gitdir: /workspace/.git_main/worktrees/$AVAILABLE_WORKTREES" > .git
-                        print_success "Git worktree configuration updated (using: $AVAILABLE_WORKTREES)"
+                        echo "gitdir: /workspace/.git_container/worktrees/$AVAILABLE_WORKTREES" > .git
+                        # Update the gitdir file in the container copy
+                        echo "/workspace/.git" > "/workspace/.git_container/worktrees/$AVAILABLE_WORKTREES/gitdir"
+                        print_success "Git worktree configuration adapted (using: $AVAILABLE_WORKTREES)"
                     else
-                        print_warning "No worktrees found in mounted git directory"
+                        print_warning "No worktrees found in copied git directory"
                         print_info "Converting to standalone git repository"
                         # Convert to a standalone repository
                         rm -f .git
+                        rm -rf .git_container
                         git init
                         git add .
                     fi
                 else
-                    print_warning "Worktrees directory not found in mounted git"
+                    print_warning "Worktrees directory not found in copied git"
                     print_info "Converting to standalone git repository"
                     # Convert to a standalone repository
                     rm -f .git
+                    rm -rf .git_container
                     git init
                     git add .
                 fi
@@ -226,9 +248,13 @@ if [ -d "/workspace" ]; then
                 echo "  Git repository (worktree) detected:"
                 echo "    • Branch: $(git branch --show-current 2>/dev/null || echo 'detached')"
                 echo "    • Status: $(git status --porcelain 2>/dev/null | wc -l) modified files"
+                # Add .git_container and .git_main to local git exclusions
+                echo ".git_main" >> .git/info/exclude 2>/dev/null || true
+                echo ".git_container" >> .git/info/exclude 2>/dev/null || true
             else
                 print_warning "Git status check failed - reinitializing as standalone repository"
                 rm -f .git
+                rm -rf .git_container
                 git init
                 git add .
                 echo "  Git repository initialized (standalone)"

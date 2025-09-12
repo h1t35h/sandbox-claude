@@ -76,6 +76,10 @@ logs/
 .sandbox-claude.yml
 sessions-backup.json
 
+# Git worktree container files
+.git_main/
+.git_container/
+
 # Temporary files
 tmp/
 temp/
