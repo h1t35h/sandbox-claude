@@ -7,6 +7,10 @@ import sqlite3
 from pathlib import Path
 from typing import Any, Optional
 
+from .logging_config import get_logger
+
+logger = get_logger(__name__)
+
 
 class SessionStore:
     """Manages persistent storage of container sessions."""
@@ -20,7 +24,12 @@ class SessionStore:
             self.db_path = Path(db_path)
 
         # Ensure directory exists
-        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            self.db_path.parent.mkdir(parents=True, exist_ok=True)
+            logger.debug(f"Session store initialized with database: {self.db_path}")
+        except OSError as e:
+            logger.error(f"Failed to create database directory: {e}")
+            raise
 
         # Initialize database
         self._init_database()
@@ -43,7 +52,7 @@ class SessionStore:
                     docker_image TEXT,
                     metadata TEXT
                 )
-            """
+            """,
             )
 
             # Create indexes for efficient queries
@@ -51,28 +60,28 @@ class SessionStore:
                 """
                 CREATE INDEX IF NOT EXISTS idx_project
                 ON sandboxes(project_name)
-            """
+            """,
             )
 
             conn.execute(
                 """
                 CREATE INDEX IF NOT EXISTS idx_feature
                 ON sandboxes(feature_name)
-            """
+            """,
             )
 
             conn.execute(
                 """
                 CREATE INDEX IF NOT EXISTS idx_project_feature
                 ON sandboxes(project_name, feature_name)
-            """
+            """,
             )
 
             conn.execute(
                 """
                 CREATE INDEX IF NOT EXISTS idx_status
                 ON sandboxes(status)
-            """
+            """,
             )
 
             conn.commit()
@@ -271,7 +280,7 @@ class SessionStore:
                 FROM sandboxes
                 GROUP BY project_name
                 ORDER BY count DESC
-            """
+            """,
             )
             by_project = cursor.fetchall()
 
@@ -282,7 +291,7 @@ class SessionStore:
                 FROM sandboxes
                 ORDER BY last_accessed DESC
                 LIMIT 5
-            """
+            """,
             )
             recent = cursor.fetchall()
 

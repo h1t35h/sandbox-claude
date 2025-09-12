@@ -72,6 +72,55 @@ class ConfigSync:
 
         return mounts
 
+    def _validate_claude_json(self, results: dict[str, Any]) -> None:
+        """Validate .claude.json file format and content."""
+        if not self.claude_json.exists():
+            return
+
+        try:
+            with open(self.claude_json) as f:
+                config = json.load(f)
+
+                # Check for required fields
+                if not config.get("api_key") and not config.get("token"):
+                    results["warnings"].append("No API key or token found in .claude.json")
+        except json.JSONDecodeError as e:
+            results["valid"] = False
+            results["errors"].append(f"Invalid JSON in .claude.json: {e}")
+        except Exception as e:
+            results["valid"] = False
+            results["errors"].append(f"Error reading .claude.json: {e}")
+
+    def _validate_claude_directory(self, results: dict[str, Any]) -> None:
+        """Validate .claude directory permissions and sensitive files."""
+        if not self.claude_config_dir.exists():
+            return
+
+        # Check if directory is readable
+        if not os.access(self.claude_config_dir, os.R_OK):
+            results["valid"] = False
+            results["errors"].append(".claude directory is not readable")
+            return
+
+        # Check for sensitive files
+        self._check_sensitive_file_permissions(results)
+
+    def _check_sensitive_file_permissions(self, results: dict[str, Any]) -> None:
+        """Check permissions on sensitive files in .claude directory."""
+        sensitive_files = ["credentials", "tokens", "keys"]
+
+        for file_path in self.claude_config_dir.rglob("*"):
+            if not file_path.is_file():
+                continue
+
+            for sensitive in sensitive_files:
+                if sensitive in file_path.name.lower():
+                    stat_info = file_path.stat()
+                    if stat_info.st_mode & 0o077:
+                        results["warnings"].append(
+                            f"Sensitive file {file_path.name} has permissive permissions",
+                        )
+
     def validate_config(self) -> dict[str, Any]:
         """Validate Claude configuration files."""
         results: dict[str, Any] = {
@@ -80,41 +129,8 @@ class ConfigSync:
             "warnings": [],
         }
 
-        # Check .claude.json format
-        if self.claude_json.exists():
-            try:
-                with open(self.claude_json) as f:
-                    config = json.load(f)
-
-                    # Check for required fields
-                    if not config.get("api_key") and not config.get("token"):
-                        results["warnings"].append("No API key or token found in .claude.json")
-            except json.JSONDecodeError as e:
-                results["valid"] = False
-                results["errors"].append(f"Invalid JSON in .claude.json: {e}")
-            except Exception as e:
-                results["valid"] = False
-                results["errors"].append(f"Error reading .claude.json: {e}")
-
-        # Check .claude directory permissions
-        if self.claude_config_dir.exists():
-            # Check if directory is readable
-            if not os.access(self.claude_config_dir, os.R_OK):
-                results["valid"] = False
-                results["errors"].append(".claude directory is not readable")
-
-            # Check for sensitive files
-            sensitive_files = ["credentials", "tokens", "keys"]
-            for file_path in self.claude_config_dir.rglob("*"):
-                if file_path.is_file():
-                    for sensitive in sensitive_files:
-                        if sensitive in file_path.name.lower():
-                            # Check file permissions
-                            stat_info = file_path.stat()
-                            if stat_info.st_mode & 0o077:
-                                results["warnings"].append(
-                                    f"Sensitive file {file_path.name} has permissive permissions"
-                                )
+        self._validate_claude_json(results)
+        self._validate_claude_directory(results)
 
         return results
 
@@ -193,7 +209,7 @@ Add your project-specific settings here.
 ## Custom Commands
 
 Define custom commands for your workflow.
-"""
+""",
             )
             created = True
 

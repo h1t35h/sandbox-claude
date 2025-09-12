@@ -8,10 +8,15 @@ import sys
 from pathlib import Path
 from typing import Any, Optional
 
-import docker
 from docker.errors import APIError, DockerException, NotFound
 from docker.models.containers import Container
 from docker.types import Mount
+
+import docker
+
+from .logging_config import get_logger
+
+logger = get_logger(__name__)
 
 
 class ContainerManager:
@@ -23,26 +28,34 @@ class ContainerManager:
             self.client = docker.from_env()  # type: ignore
             # Test connection
             self.client.ping()
+            logger.debug("Docker client initialized successfully")
         except DockerException as e:
+            logger.error(f"Cannot connect to Docker daemon: {e}")
             print("Error: Cannot connect to Docker. Is Docker running?")
-            print(f"Details: {e}")
             sys.exit(1)
 
     def image_exists(self, image_name: str) -> bool:
         """Check if a Docker image exists locally."""
         try:
             self.client.images.get(image_name)
+            logger.debug(f"Image {image_name} found locally")
             return True
         except NotFound:
+            logger.debug(f"Image {image_name} not found locally")
+            return False
+        except APIError as e:
+            logger.error(f"Failed to check image {image_name}: {e}")
             return False
 
     def pull_image(self, image_name: str) -> bool:
         """Pull a Docker image from registry."""
         try:
+            logger.info(f"Pulling image {image_name}...")
             self.client.images.pull(image_name)
+            logger.info(f"Successfully pulled image {image_name}")
             return True
         except (DockerException, APIError) as e:
-            print(f"Failed to pull image: {e}")
+            logger.error(f"Failed to pull image {image_name}: {e}")
             return False
 
     def build_base_image(self) -> bool:
@@ -50,10 +63,12 @@ class ContainerManager:
         dockerfile_path = Path(__file__).parent.parent.parent / "docker" / "Dockerfile"
 
         if not dockerfile_path.exists():
+            logger.error(f"Dockerfile not found at {dockerfile_path}")
             print(f"Dockerfile not found at {dockerfile_path}")
             return False
 
         try:
+            logger.info("Building base Docker image...")
             # Use subprocess for better output streaming
             result = subprocess.run(
                 [
@@ -65,11 +80,22 @@ class ContainerManager:
                     str(dockerfile_path),
                     str(dockerfile_path.parent),
                 ],
-                capture_output=False,
+                check=False, capture_output=False,
                 text=True,
+                timeout=600,  # 10 minute timeout
             )
-            return result.returncode == 0
+            success = result.returncode == 0
+            if success:
+                logger.info("Base image built successfully")
+            else:
+                logger.error(f"Build failed with exit code {result.returncode}")
+            return success
+        except subprocess.TimeoutExpired:
+            logger.error("Build timed out after 10 minutes")
+            print("Build timed out after 10 minutes")
+            return False
         except Exception as e:
+            logger.error(f"Build failed with exception: {e}")
             print(f"Build failed: {e}")
             return False
 
@@ -94,7 +120,7 @@ class ContainerManager:
                             source=config["source"],
                             type=config.get("type", "bind"),
                             read_only=config.get("read_only", False),
-                        )
+                        ),
                     )
 
             # Create container
@@ -117,6 +143,11 @@ class ContainerManager:
             return container
 
         except APIError as e:
+            logger.error(f"Failed to create container {name}: {e}")
+            print(f"Failed to create container: {e}")
+            return None
+        except Exception as e:
+            logger.error(f"Unexpected error creating container {name}: {e}")
             print(f"Failed to create container: {e}")
             return None
 
@@ -164,7 +195,9 @@ class ContainerManager:
         """Attach to a running container (interactive shell)."""
         try:
             # Use subprocess for proper TTY handling, run as sandman user
-            subprocess.run(["docker", "exec", "-it", "-u", "sandman", container_id, "/bin/bash"], check=False)
+            subprocess.run(
+                ["docker", "exec", "-it", "-u", "sandman", container_id, "/bin/bash"], check=False,
+            )
         except Exception as e:
             print(f"Failed to attach to container: {e}")
 
@@ -192,7 +225,7 @@ class ContainerManager:
         """List all sandbox-claude containers."""
         try:
             containers: list[Container] = self.client.containers.list(
-                all=True, filters={"label": "sandbox.claude.version"}
+                all=True, filters={"label": "sandbox.claude.version"},
             )
             return containers
         except APIError:

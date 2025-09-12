@@ -4,19 +4,24 @@ Main CLI interface for sandbox-claude.
 
 import os
 import sys
+from builtins import list as builtin_list
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
 import click
+from docker.models.containers import Container
 from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich.table import Table
 
 from .config_sync import ConfigSync
 from .container_manager import ContainerManager
+from .logging_config import get_logger, setup_logging
 from .session_store import SessionStore
 from .utils import format_timestamp, generate_container_name, get_git_worktree_info, validate_name
+
+logger = get_logger(__name__)
 
 console = Console()
 manager = ContainerManager()
@@ -24,91 +29,267 @@ store = SessionStore()
 config_sync = ConfigSync()
 
 
-def _prepare_mounts(no_mount_config: bool) -> dict[str, dict[str, Any]]:
-    """Prepare mount configurations for container."""
-    current_dir = Path(os.getcwd())
+def _validate_project_feature_names(project: str, feature: str) -> None:
+    """Validate project and feature names, exit on invalid names."""
+    if not validate_name(project):
+        console.print(
+            "[red]Invalid project name. Use only letters, numbers, hyphens, and underscores.[/red]",
+        )
+        sys.exit(1)
 
-    mounts: dict[str, dict[str, Any]] = {
-        "workspace": {
-            "source": str(current_dir),
-            "target": "/workspace",
-            "type": "bind",
-        }
+    if not validate_name(feature):
+        console.print(
+            "[red]Invalid feature name. Use only letters, numbers, hyphens, and underscores.[/red]",
+        )
+        sys.exit(1)
+
+
+def _try_reuse_existing_container(project: str, feature: str, detach: bool) -> bool:
+    """Try to reuse existing container if available. Returns True if reused."""
+    existing = store.find_container(project=project, feature=feature, status="running")
+    if not existing:
+        return False
+
+    console.print(f"[green]♻️  Reusing container: {existing['container_name']}[/green]")
+    console.print(f"[dim]Container ID: {existing['container_id'][:12]}[/dim]")
+
+    if not detach:
+        console.print("\n[yellow]Attaching to container...[/yellow]")
+        manager.attach_to_container(existing["container_id"])
+    return True
+
+
+def _ensure_image_available(image: str, progress: Progress, task: Any) -> None:
+    """Ensure Docker image is available, pull or build if necessary."""
+    if manager.image_exists(image):
+        return
+
+    progress.update(task, description=f"Pulling image {image}...")
+    success = manager.pull_image(image)
+    if success:
+        return
+
+    console.print(f"[red]Failed to pull image {image}[/red]")
+    console.print("[yellow]Building image locally...[/yellow]")
+    if not manager.build_base_image():
+        console.print("[red]Failed to build base image[/red]")
+        sys.exit(1)
+
+
+def _create_and_start_container(
+    container_name: str,
+    image: str,
+    project: str,
+    feature: str,
+    mounts: dict[str, dict[str, Any]],
+    progress: Progress,
+    task: Any,
+) -> Container:
+    """Create and start a new container."""
+    progress.update(task, description="Creating container...")
+
+    container = manager.create_container(
+        name=container_name,
+        image=image,
+        mounts=mounts,
+        labels={
+            "sandbox.claude.project": project,
+            "sandbox.claude.feature": feature,
+            "sandbox.claude.created": datetime.now().isoformat(),
+            "sandbox.claude.version": "1.0.0",
+        },
+        environment={
+            "SANDBOX_PROJECT": project,
+            "SANDBOX_FEATURE": feature,
+        },
+    )
+
+    if not container:
+        console.print("[red]Failed to create container[/red]")
+        sys.exit(1)
+
+    progress.update(task, description="Starting container...")
+    manager.start_container(container.id)
+
+    # Store in database
+    store.add_container(
+        container_id=container.id,
+        container_name=container_name,
+        project_name=project,
+        feature_name=feature,
+        working_dir=os.getcwd(),
+        docker_image=image,
+    )
+
+    progress.update(task, description="Container ready!", completed=True)
+    return container
+
+
+def _sync_container_statuses(project: Optional[str] = None) -> None:
+    """Sync container statuses with Docker."""
+    all_containers = store.list_containers(project=project)
+    for container in all_containers:
+        docker_status = manager.get_container_status(container["container_id"])
+        if docker_status != container["status"]:
+            store.update_container_status(container["container_id"], docker_status)
+
+
+def _get_containers_to_remove(
+    project: Optional[str], all_containers: bool,
+) -> builtin_list[dict[str, Any]]:
+    """Get list of containers to remove based on filters."""
+    removable_statuses = ["stopped", "exited", "not_found", "error"]
+
+    if all_containers:
+        containers = store.list_containers()
+    elif project:
+        containers = store.list_containers(project=project)
+    else:
+        console.print("[red]Specify --project or --all[/red]")
+        sys.exit(1)
+
+    return [c for c in containers if c["status"] in removable_statuses]
+
+
+def _confirm_container_removal(containers: builtin_list[dict[str, Any]]) -> bool:
+    """Ask for confirmation before removing containers."""
+    console.print(f"[yellow]Will remove {len(containers)} container(s):[/yellow]")
+    for c in containers:
+        console.print(f"  - {c['project_name']}/{c['feature_name']} ({c['container_id'][:12]})")
+    return click.confirm("Continue?")
+
+
+def _remove_containers(containers: builtin_list[dict[str, Any]]) -> None:
+    """Remove containers with progress display."""
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        console=console,
+    ) as progress:
+        task = progress.add_task(
+            f"Removing {len(containers)} container(s)...",
+            total=len(containers),
+        )
+
+        for container in containers:
+            # Try to remove from Docker first (force=True handles both running and stopped)
+            if container["status"] != "not_found":
+                manager.remove_container(container["container_id"])
+            # Always remove from database
+            store.remove_container(container["container_id"])
+            progress.advance(task)
+
+
+def _add_workspace_mount(mounts: dict[str, dict[str, Any]]) -> None:
+    """Add workspace mount configuration."""
+    current_dir = Path(os.getcwd())
+    mounts["workspace"] = {
+        "source": str(current_dir),
+        "target": "/workspace",
+        "type": "bind",
     }
 
-    # Check if we're in a git worktree and need to mount the main git directory
+
+def _add_git_worktree_mount(mounts: dict[str, dict[str, Any]]) -> None:
+    """Add git worktree mount if applicable."""
+    current_dir = Path(os.getcwd())
     is_worktree, main_git_dir = get_git_worktree_info(current_dir)
-    if is_worktree and main_git_dir:
-        # Verify the main git directory exists and is accessible
-        if main_git_dir.exists() and main_git_dir.is_dir():
-            # Mount the main .git directory as READ-ONLY to prevent breaking host worktree
-            mounts["main_git"] = {
-                "source": str(main_git_dir),
-                "target": "/workspace/.git_main",
-                "type": "bind",
-                "read_only": True,  # Critical: prevent modifications to host git metadata
-            }
-            console.print("[dim]Detected git worktree, mounting main repository (read-only)[/dim]")
-        else:
-            console.print("[yellow]Warning: Git worktree detected but main repository not accessible[/yellow]")
 
-    if not no_mount_config:
-        # Create a shared config directory that's writable
-        shared_config_dir = Path("/tmp/csandbox/.claude")
-        shared_config_dir.mkdir(parents=True, exist_ok=True)
-        
-        # Mount the shared config directory as writable
-        mounts["shared_config"] = {
-            "source": str(shared_config_dir),
-            "target": "/host-claude-config",
+    if not (is_worktree and main_git_dir):
+        return
+
+    # Verify the main git directory exists and is accessible
+    if main_git_dir.exists() and main_git_dir.is_dir():
+        # Mount the main .git directory as READ-ONLY to prevent breaking host worktree
+        mounts["main_git"] = {
+            "source": str(main_git_dir),
+            "target": "/workspace/.git_main",
             "type": "bind",
-            "read_only": False,  # Writable mount for syncing back
+            "read_only": True,  # Critical: prevent modifications to host git metadata
         }
-        
-        claude_config = Path.home() / ".claude"
-        claude_json = Path.home() / ".claude.json"
-        # Check for credentials in both old and new locations
-        claude_creds_old = Path.home() / ".claude_creds.json"
-        claude_creds_new = Path.home() / ".claude" / ".credentials.json"
+        console.print("[dim]Detected git worktree, mounting main repository (read-only)[/dim]")
+        logger.info(f"Mounted git worktree main directory: {main_git_dir}")
+    else:
+        console.print(
+            "[yellow]Warning: Git worktree detected but main repository not accessible[/yellow]",
+        )
+        logger.warning(f"Git worktree detected but main repository not accessible: {main_git_dir}")
 
-        # Also mount original configs as read-only for initial copy
-        if claude_config.exists():
-            mounts["claude_config"] = {
-                "source": str(claude_config),
-                "target": "/tmp/.claude.host",
-                "type": "bind",
-                "read_only": True,
-            }
 
-        if claude_json.exists():
-            mounts["claude_json"] = {
-                "source": str(claude_json),
-                "target": "/tmp/.claude.json.host",
-                "type": "bind",
-                "read_only": True,
-            }
+def _add_claude_config_mounts(mounts: dict[str, dict[str, Any]]) -> None:
+    """Add Claude configuration mounts."""
+    # Create a shared config directory that's writable
+    shared_config_dir = Path("/tmp/csandbox/.claude")
+    shared_config_dir.mkdir(parents=True, exist_ok=True)
 
-        # Mount credentials file from either location
-        if claude_creds_new.exists():
-            mounts["claude_creds"] = {
-                "source": str(claude_creds_new),
-                "target": "/tmp/.claude_creds.json.host",
-                "type": "bind",
-                "read_only": True,
-            }
-        elif claude_creds_old.exists():
-            mounts["claude_creds"] = {
-                "source": str(claude_creds_old),
-                "target": "/tmp/.claude_creds.json.host",
-                "type": "bind",
-                "read_only": True,
-            }
+    # Mount the shared config directory as writable
+    mounts["shared_config"] = {
+        "source": str(shared_config_dir),
+        "target": "/host-claude-config",
+        "type": "bind",
+        "read_only": False,  # Writable mount for syncing back
+    }
 
+    claude_config = Path.home() / ".claude"
+    claude_json = Path.home() / ".claude.json"
+    # Check for credentials in both old and new locations
+    claude_creds_old = Path.home() / ".claude_creds.json"
+    claude_creds_new = Path.home() / ".claude" / ".credentials.json"
+
+    # Also mount original configs as read-only for initial copy
+    if claude_config.exists():
+        mounts["claude_config"] = {
+            "source": str(claude_config),
+            "target": "/tmp/.claude.host",
+            "type": "bind",
+            "read_only": True,
+        }
+
+    if claude_json.exists():
+        mounts["claude_json"] = {
+            "source": str(claude_json),
+            "target": "/tmp/.claude.json.host",
+            "type": "bind",
+            "read_only": True,
+        }
+
+    # Mount credentials file from either location
+    if claude_creds_new.exists():
+        mounts["claude_creds"] = {
+            "source": str(claude_creds_new),
+            "target": "/tmp/.claude_creds.json.host",
+            "type": "bind",
+            "read_only": True,
+        }
+    elif claude_creds_old.exists():
+        mounts["claude_creds"] = {
+            "source": str(claude_creds_old),
+            "target": "/tmp/.claude_creds.json.host",
+            "type": "bind",
+            "read_only": True,
+        }
+
+
+def _prepare_mounts(no_mount_config: bool) -> dict[str, dict[str, Any]]:
+    """Prepare mount configurations for container."""
+    mounts: dict[str, dict[str, Any]] = {}
+
+    # Add workspace mount
+    _add_workspace_mount(mounts)
+
+    # Add git worktree mount if applicable
+    _add_git_worktree_mount(mounts)
+
+    # Add Claude configuration mounts if not disabled
+    if not no_mount_config:
+        _add_claude_config_mounts(mounts)
+
+    logger.debug(f"Prepared {len(mounts)} mount configurations")
     return mounts
 
 
 def _find_container_by_project_feature(
-    project: Optional[str], feature: Optional[str]
+    project: Optional[str], feature: Optional[str],
 ) -> Optional[str]:
     """Find container ID by project and/or feature."""
     container = store.find_container(project=project, feature=feature, status="running")
@@ -122,7 +303,6 @@ def _find_container_by_project_feature(
 @click.version_option(version="1.0.0", prog_name="sandbox-claude")
 def cli() -> None:
     """Sandbox Claude - Manage sandboxed Claude Code environments in Docker."""
-    pass
 
 
 @cli.command()
@@ -149,31 +329,11 @@ def new(
     no_mount_config: bool,
 ) -> None:
     """Create a new sandbox container for development."""
-
-    # Validate names
-    if not validate_name(project):
-        console.print(
-            "[red]Invalid project name. Use only letters, numbers, hyphens, and underscores.[/red]"
-        )
-        sys.exit(1)
-
-    if not validate_name(feature):
-        console.print(
-            "[red]Invalid feature name. Use only letters, numbers, hyphens, and underscores.[/red]"
-        )
-        sys.exit(1)
+    _validate_project_feature_names(project, feature)
 
     # Check for reuse
-    if reuse:
-        existing = store.find_container(project=project, feature=feature, status="running")
-        if existing:
-            console.print(f"[green]♻️  Reusing container: {existing['container_name']}[/green]")
-            console.print(f"[dim]Container ID: {existing['container_id'][:12]}[/dim]")
-
-            if not detach:
-                console.print("\n[yellow]Attaching to container...[/yellow]")
-                manager.attach_to_container(existing["container_id"])
-            return
+    if reuse and _try_reuse_existing_container(project, feature, detach):
+        return
 
     # Generate container name
     container_name = generate_container_name(project, feature)
@@ -183,59 +343,17 @@ def new(
         TextColumn("[progress.description]{task.description}"),
         console=console,
     ) as progress:
-        # Check if image exists
+        # Ensure image is available
         task = progress.add_task("Checking Docker image...", total=None)
-        if not manager.image_exists(image):
-            progress.update(task, description=f"Pulling image {image}...")
-            success = manager.pull_image(image)
-            if not success:
-                console.print(f"[red]Failed to pull image {image}[/red]")
-                console.print("[yellow]Building image locally...[/yellow]")
-                if not manager.build_base_image():
-                    console.print("[red]Failed to build base image[/red]")
-                    sys.exit(1)
+        _ensure_image_available(image, progress, task)
 
-        progress.update(task, description="Creating container...")
-
-        # Prepare mounts
+        # Prepare mounts and create container
         mounts = _prepare_mounts(no_mount_config)
-
-        # Create container
-        container = manager.create_container(
-            name=container_name,
-            image=image,
-            mounts=mounts,
-            labels={
-                "sandbox.claude.project": project,
-                "sandbox.claude.feature": feature,
-                "sandbox.claude.created": datetime.now().isoformat(),
-                "sandbox.claude.version": "1.0.0",
-            },
-            environment={
-                "SANDBOX_PROJECT": project,
-                "SANDBOX_FEATURE": feature,
-            },
+        container = _create_and_start_container(
+            container_name, image, project, feature, mounts, progress, task,
         )
 
-        if not container:
-            console.print("[red]Failed to create container[/red]")
-            sys.exit(1)
-
-        progress.update(task, description="Starting container...")
-        manager.start_container(container.id)
-
-        # Store in database
-        store.add_container(
-            container_id=container.id,
-            container_name=container_name,
-            project_name=project,
-            feature_name=feature,
-            working_dir=os.getcwd(),
-            docker_image=image,
-        )
-
-        progress.update(task, description="Container ready!", completed=True)
-
+    # Success output
     console.print(f"\n[green]✅ Created sandbox: {container_name}[/green]")
     console.print(f"[dim]Container ID: {container.id[:12]}[/dim]")
     console.print("[dim]Workspace: /workspace[/dim]")
@@ -332,7 +450,7 @@ def ssh(
     container_info = store.get_container(container_id)
     if container_info:
         console.print(
-            f"[green]📦 Connecting to {container_info['project_name']}/{container_info['feature_name']}...[/green]"
+            f"[green]📦 Connecting to {container_info['project_name']}/{container_info['feature_name']}...[/green]",
         )
 
     # Attach to container
@@ -370,7 +488,7 @@ def stop(container_ref: Optional[str], project: Optional[str], all: bool) -> Non
         console=console,
     ) as progress:
         task = progress.add_task(
-            f"Stopping {len(containers_to_stop)} container(s)...", total=len(containers_to_stop)
+            f"Stopping {len(containers_to_stop)} container(s)...", total=len(containers_to_stop),
         )
 
         for container_id in containers_to_stop:
@@ -387,63 +505,23 @@ def stop(container_ref: Optional[str], project: Optional[str], all: bool) -> Non
 @click.option("--force", "-f", is_flag=True, help="Skip confirmation")
 def clean(project: Optional[str], all: bool, force: bool) -> None:
     """Remove stopped sandbox containers."""
+    # Sync container statuses with Docker first
+    _sync_container_statuses(project if not all else None)
 
-    # First, sync container statuses with Docker
-    all_containers = store.list_containers(project=project if not all else None)
-    for container in all_containers:
-        docker_status = manager.get_container_status(container["container_id"])
-        if docker_status != container["status"]:
-            store.update_container_status(container["container_id"], docker_status)
-
-    containers_to_remove = []
-
-    if all:
-        # Get containers with status "stopped" or "exited" or "not_found"
-        containers = store.list_containers()
-        containers_to_remove = [
-            c for c in containers if c["status"] in ["stopped", "exited", "not_found", "error"]
-        ]
-    elif project:
-        # Get containers for project with status "stopped" or "exited" or "not_found"
-        containers = store.list_containers(project=project)
-        containers_to_remove = [
-            c for c in containers if c["status"] in ["stopped", "exited", "not_found", "error"]
-        ]
-    else:
-        console.print("[red]Specify --project or --all[/red]")
-        sys.exit(1)
+    # Get containers to remove
+    containers_to_remove = _get_containers_to_remove(project, all)
 
     if not containers_to_remove:
         console.print("[yellow]No stopped containers to clean[/yellow]")
         return
 
-    if not force:
-        console.print(f"[yellow]Will remove {len(containers_to_remove)} container(s):[/yellow]")
-        for c in containers_to_remove:
-            console.print(f"  - {c['project_name']}/{c['feature_name']} ({c['container_id'][:12]})")
+    # Ask for confirmation unless force is used
+    if not force and not _confirm_container_removal(containers_to_remove):
+        console.print("[dim]Cancelled[/dim]")
+        return
 
-        if not click.confirm("Continue?"):
-            console.print("[dim]Cancelled[/dim]")
-            return
-
-    with Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        console=console,
-    ) as progress:
-        task = progress.add_task(
-            f"Removing {len(containers_to_remove)} container(s)...",
-            total=len(containers_to_remove),
-        )
-
-        for container in containers_to_remove:
-            # Try to remove from Docker first (force=True handles both running and stopped)
-            if container["status"] != "not_found":
-                manager.remove_container(container["container_id"])
-            # Always remove from database
-            store.remove_container(container["container_id"])
-            progress.advance(task)
-
+    # Remove containers
+    _remove_containers(containers_to_remove)
     console.print(f"[green]✅ Removed {len(containers_to_remove)} container(s)[/green]")
 
 
@@ -497,10 +575,22 @@ def build(force: bool) -> None:
 
 def main() -> None:
     """Main entry point for the CLI."""
+    # Set up logging
+    log_dir = Path.home() / ".sandbox_claude" / "logs"
+    log_file = log_dir / "sandbox-claude.log"
+    setup_logging(level="INFO", log_file=log_file)
+
     try:
+        logger.info("Starting sandbox-claude CLI")
         cli()
+    except KeyboardInterrupt:
+        logger.info("User interrupted the operation")
+        console.print("\n[yellow]Operation cancelled by user[/yellow]")
+        sys.exit(0)
     except Exception as e:
+        logger.exception(f"Unexpected error in CLI: {e}")
         console.print(f"[red]Error: {e}[/red]")
+        console.print("[dim]Check ~/.sandbox_claude/logs/sandbox-claude.log for details[/dim]")
         sys.exit(1)
 
 

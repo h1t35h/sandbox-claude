@@ -9,4 +9,4 @@ from .config_sync import ConfigSync
 from .container_manager import ContainerManager
 from .session_store import SessionStore
 
-__all__ = ["ContainerManager", "SessionStore", "ConfigSync"]
+__all__ = ["ConfigSync", "ContainerManager", "SessionStore"]

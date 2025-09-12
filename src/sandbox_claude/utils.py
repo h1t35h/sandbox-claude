@@ -11,7 +11,7 @@ from typing import Any, Optional
 
 def get_git_worktree_info(path: Path) -> tuple[bool, Optional[Path]]:
     """Check if a directory is a git worktree and return the main git directory.
-    
+
     Returns:
         (is_worktree, main_git_dir)
         - is_worktree: True if the path is a git worktree
@@ -42,7 +42,7 @@ def get_git_worktree_info(path: Path) -> tuple[bool, Optional[Path]]:
                     for i, part in enumerate(gitdir.parts):
                         if part == "worktrees" and i > 0:
                             # Check if the previous part is .git (exact match) or ends with .git
-                            prev_part = gitdir.parts[i-1]
+                            prev_part = gitdir.parts[i - 1]
                             if prev_part == ".git" or prev_part.endswith(".git"):
                                 main_git_dir = Path(*gitdir.parts[:i])
                                 return True, main_git_dir
@@ -85,6 +85,13 @@ def sanitize_name(name: str) -> str:
 
 def validate_name(name: str) -> bool:
     """Validate a project or feature name."""
+    if not name or not isinstance(name, str):
+        return False
+
+    # Check length constraints
+    if len(name) < 1 or len(name) > 50:
+        return False
+
     # Only allow alphanumeric, hyphens, and underscores
     pattern = r"^[a-zA-Z0-9-_]+$"
     return bool(re.match(pattern, name))
@@ -92,6 +99,9 @@ def validate_name(name: str) -> bool:
 
 def format_timestamp(timestamp: str) -> str:
     """Format a timestamp for display."""
+    if not timestamp or not isinstance(timestamp, str):
+        return "unknown"
+
     try:
         dt = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
         now = datetime.now()
@@ -99,18 +109,18 @@ def format_timestamp(timestamp: str) -> str:
 
         if diff.days > 7:
             return dt.strftime("%Y-%m-%d")
-        elif diff.days > 0:
+        if diff.days > 0:
             return f"{diff.days} day{'s' if diff.days > 1 else ''} ago"
-        elif diff.seconds > 3600:
+        if diff.seconds > 3600:
             hours = diff.seconds // 3600
             return f"{hours} hour{'s' if hours > 1 else ''} ago"
-        elif diff.seconds > 60:
+        if diff.seconds > 60:
             minutes = diff.seconds // 60
             return f"{minutes} minute{'s' if minutes > 1 else ''} ago"
-        else:
-            return "just now"
-    except Exception:
-        return timestamp
+        return "just now"
+    except (ValueError, TypeError, AttributeError):
+        # Return the original timestamp if it's a reasonable length, otherwise "invalid"
+        return timestamp if len(timestamp) <= 30 else "invalid timestamp"
 
 
 def format_size(size_bytes: int) -> str:
@@ -144,7 +154,7 @@ def check_docker_installed() -> bool:
     import subprocess
 
     try:
-        result = subprocess.run(["docker", "--version"], capture_output=True, text=True, timeout=5)
+        result = subprocess.run(["docker", "--version"], check=False, capture_output=True, text=True, timeout=5)
         return result.returncode == 0
     except (subprocess.SubprocessError, FileNotFoundError):
         return False
@@ -155,7 +165,7 @@ def check_docker_running() -> bool:
     import subprocess
 
     try:
-        result = subprocess.run(["docker", "info"], capture_output=True, text=True, timeout=5)
+        result = subprocess.run(["docker", "info"], check=False, capture_output=True, text=True, timeout=5)
         return result.returncode == 0
     except (subprocess.SubprocessError, FileNotFoundError):
         return False
