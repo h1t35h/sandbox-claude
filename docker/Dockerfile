@@ -47,6 +47,28 @@ RUN apt-get update && apt-get install -y \
     tmux \
     # Locale
     locales \
+    # Playwright browser dependencies
+    libnss3 \
+    libnspr4 \
+    libatk1.0-0 \
+    libatk-bridge2.0-0 \
+    libcups2 \
+    libdrm2 \
+    libdbus-1-3 \
+    libxkbcommon0 \
+    libxcomposite1 \
+    libxdamage1 \
+    libxfixes3 \
+    libxrandr2 \
+    libgbm1 \
+    libpango-1.0-0 \
+    libcairo2 \
+    libasound2 \
+    libatspi2.0-0 \
+    libxshmfence1 \
+    fonts-liberation \
+    fonts-noto-color-emoji \
+    xvfb \
     && rm -rf /var/lib/apt/lists/*
 
 # Set Python 3.12 as default
@@ -83,12 +105,18 @@ RUN curl -sS https://bootstrap.pypa.io/get-pip.py | python3.12 \
     fastapi \
     uvicorn \
     pytest \
+    pytest-playwright \
     black \
     ruff \
     mypy \
     rich \
     click \
-    pyyaml
+    pyyaml \
+    playwright \
+    mcp
+
+# Install Python Playwright browsers
+RUN python3.12 -m playwright install
 
 # Install common Node packages globally
 RUN npm install -g \
@@ -99,13 +127,23 @@ RUN npm install -g \
     eslint \
     jest \
     yarn \
-    pnpm
+    pnpm \
+    playwright \
+    @playwright/test
+
+# Install Playwright browsers (Chromium, Firefox, WebKit)
+# Install with --with-deps to ensure all system dependencies are met
+RUN npx playwright install --with-deps chromium firefox webkit
 
 # Configure locale
 RUN locale-gen en_US.UTF-8
 ENV LANG=en_US.UTF-8
 ENV LANGUAGE=en_US:en
 ENV LC_ALL=en_US.UTF-8
+
+# Playwright environment variables
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=0
 
 # Create sandman user with UID/GID 1000
 RUN groupadd -g 1000 sandman \
@@ -157,7 +195,10 @@ RUN mkdir -p /root/.claude \
     && chown -R sandman:sandman /cache \
     && mkdir -p /claude-config \
     && chown sandman:sandman /claude-config \
-    && chmod 755 /claude-config
+    && chmod 755 /claude-config \
+    && mkdir -p /mcp-servers \
+    && chown sandman:sandman /mcp-servers \
+    && chmod 755 /mcp-servers
 
 # Set cache directories
 ENV PIP_CACHE_DIR=/cache/pip
@@ -174,6 +215,12 @@ COPY pull-claude-config.sh /usr/local/bin/pull-claude-config.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh \
     && chmod +x /usr/local/bin/sync-claude-config.sh \
     && chmod +x /usr/local/bin/pull-claude-config.sh
+
+# Add MCP server and configuration
+COPY mcp-playwright-server.py /mcp-servers/mcp-playwright-server.py
+COPY mcp-config.json /mcp-servers/mcp-config.json
+RUN chmod +x /mcp-servers/mcp-playwright-server.py \
+    && chown -R sandman:sandman /mcp-servers
 
 # Create a healthcheck script
 RUN echo '#!/bin/bash\npython --version && node --version && git --version' > /usr/local/bin/healthcheck.sh \

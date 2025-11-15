@@ -44,6 +44,16 @@ dev = [
     "mypy>=1.5.0",
     "types-PyYAML",
 ]
+playwright = [
+    "playwright>=1.40.0",
+    "pytest-playwright>=0.4.0",
+]
+mcp = [
+    "mcp>=0.1.0",
+]
+all = [
+    "sandbox-claude[dev,playwright,mcp]",
+]
 
 [project.scripts]
 sandbox-claude = "sandbox_claude.cli:main"

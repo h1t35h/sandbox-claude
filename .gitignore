@@ -85,3 +85,10 @@ tmp/
 temp/
 *.tmp
 *.bak
+
+# Playwright
+screenshot*.png
+test-results/
+playwright-report/
+playwright/.cache/
+.ms-playwright/

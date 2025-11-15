@@ -117,4 +117,16 @@ release: ## Create a new release
 	twine check dist/*
 	@echo "$(GREEN)✓ Release ready. Run 'twine upload dist/*' to publish$(NC)"
 
+test-playwright: ## Test Playwright installation
+	@echo "$(YELLOW)Testing Playwright installation...$(NC)"
+	@$(PYTHON) -c "import playwright; print('✓ Playwright Python package installed')"
+	@npx playwright --version || echo "$(RED)✗ Playwright Node package not found$(NC)"
+	@echo "$(GREEN)✓ Playwright test complete$(NC)"
+
+install-playwright: ## Install Playwright dependencies
+	@echo "$(YELLOW)Installing Playwright dependencies...$(NC)"
+	$(PIP) install playwright pytest-playwright mcp
+	$(PYTHON) -m playwright install --with-deps
+	@echo "$(GREEN)✓ Playwright installed successfully$(NC)"
+
 .DEFAULT_GOAL := help

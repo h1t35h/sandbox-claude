@@ -280,6 +280,52 @@ setup_shell_history() {
 }
 
 # ================================================================================
+# MCP CONFIGURATION
+# ================================================================================
+
+# Setup MCP server configuration for Claude
+setup_mcp_config() {
+    # Copy MCP configuration to Claude config directory if it doesn't exist
+    if [ ! -f "$CLAUDE_CONFIG_DIR/mcp-config.json" ]; then
+        if [ -f "/mcp-servers/mcp-config.json" ]; then
+            print_info "Setting up MCP server configuration..."
+            cp /mcp-servers/mcp-config.json "$CLAUDE_CONFIG_DIR/mcp-config.json"
+            chmod 644 "$CLAUDE_CONFIG_DIR/mcp-config.json"
+            print_success "MCP configuration installed"
+        fi
+    else
+        print_success "MCP configuration already exists"
+    fi
+
+    # Verify Playwright is available
+    if python3 -c "import playwright" 2>/dev/null; then
+        print_success "Playwright is installed and ready"
+    else
+        print_warning "Playwright import failed, some features may not work"
+    fi
+}
+
+# Display MCP information
+show_mcp_info() {
+    print_separator
+    echo "Playwright + MCP Server:"
+    echo "  • Playwright browsers: Chromium, Firefox, WebKit"
+    echo "  • MCP server: /mcp-servers/mcp-playwright-server.py"
+    echo "  • Configuration: $CLAUDE_CONFIG_DIR/mcp-config.json"
+    echo ""
+    echo "MCP Tools Available:"
+    echo "  • navigate        - Navigate to a URL"
+    echo "  • screenshot      - Take screenshots"
+    echo "  • click           - Click elements"
+    echo "  • fill            - Fill form inputs"
+    echo "  • get_text        - Extract text content"
+    echo "  • get_html        - Get HTML content"
+    echo "  • wait_for_selector - Wait for elements"
+    echo "  • evaluate        - Run JavaScript"
+    print_separator
+}
+
+# ================================================================================
 # ALIASES AND FUNCTIONS
 # ================================================================================
 
@@ -387,14 +433,19 @@ main() {
     create_session_file
     setup_shell_history
     setup_aliases
-    
+
+    # Setup MCP server
+    setup_mcp_config
+
     # Check Claude CLI
     check_claude_cli
-    
+
     echo ""
     show_claude_help
     echo ""
-    
+    show_mcp_info
+    echo ""
+
     print_success "Container ready! Type 'exit' to leave the sandbox."
     echo "════════════════════════════════════════════════════════════════"
     echo ""

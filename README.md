@@ -16,6 +16,8 @@ A powerful CLI tool for managing sandboxed Claude Code development environments 
 - 🧹 **High Code Quality**: Formatted with Black, linted with Ruff, 100% type coverage
 - 📝 **Comprehensive Logging**: Full observability with structured logging
 - 🎨 **Global Gitignore**: Container-specific files automatically excluded from git
+- 🎭 **Playwright Integration**: Browser automation with Chromium, Firefox, and WebKit pre-installed
+- 🤖 **MCP Server**: Model Context Protocol server for Claude-powered browser automation
 
 ## Prerequisites
 
@@ -109,8 +111,10 @@ Each sandbox container comes pre-configured with:
 - **Git** with global gitignore pre-configured
 - **GitHub CLI (gh)** for PR/issue management
 - **Claude Code CLI** pre-installed and configured
+- **Playwright** for browser automation (Chromium, Firefox, WebKit)
+- **MCP Server** for Claude-powered browser automation
 - **Code Quality**: black, ruff, mypy, prettier, eslint
-- **Testing**: pytest, jest
+- **Testing**: pytest, pytest-playwright, jest
 - **Editors**: vim, nano
 - **Shell**: bash, zsh, tmux
 
@@ -225,6 +229,120 @@ defaults:
     - DEBUG=true
 ```
 
+## Playwright & MCP Integration
+
+### Browser Automation with Playwright
+
+Each sandbox comes with Playwright pre-installed and configured with three browsers:
+- **Chromium** - Latest stable version
+- **Firefox** - Latest stable version
+- **WebKit** - Latest stable version
+
+#### Running Playwright Scripts
+
+**Python Example:**
+```bash
+# Inside the container
+cd /workspace
+python3 examples/playwright_example.py
+```
+
+**Node.js Example:**
+```bash
+# Inside the container
+cd /workspace
+node examples/playwright_example.js
+```
+
+#### Manual Playwright Usage
+
+**Python:**
+```python
+from playwright.sync_api import sync_playwright
+
+with sync_playwright() as p:
+    browser = p.chromium.launch(headless=True)
+    page = browser.new_page()
+    page.goto("https://example.com")
+    page.screenshot(path="screenshot.png")
+    browser.close()
+```
+
+**Node.js:**
+```javascript
+const { chromium } = require('playwright');
+
+(async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  await page.goto('https://example.com');
+  await page.screenshot({ path: 'screenshot.png' });
+  await browser.close();
+})();
+```
+
+### MCP Server for Claude
+
+The sandbox includes a **Model Context Protocol (MCP)** server that enables Claude to control browser automation directly through tool calls.
+
+#### Available MCP Tools
+
+When using Claude inside the container, the following browser automation tools are available:
+
+- **navigate** - Navigate to a URL
+- **screenshot** - Take screenshots (full page or viewport)
+- **click** - Click elements by CSS selector
+- **fill** - Fill form inputs
+- **get_text** - Extract text from elements
+- **get_html** - Get HTML content
+- **wait_for_selector** - Wait for elements to appear
+- **evaluate** - Execute JavaScript in page context
+
+#### Using MCP with Claude
+
+Simply ask Claude to perform browser automation tasks:
+
+```
+User: "Navigate to example.com and take a screenshot"
+User: "Go to hacker news and get the top 5 story titles"
+User: "Fill out the login form with username 'testuser'"
+```
+
+Claude will automatically use the MCP server to perform these actions.
+
+#### MCP Configuration
+
+The MCP server is automatically configured on container startup:
+- **Server Script**: `/mcp-servers/mcp-playwright-server.py`
+- **Configuration**: `$CLAUDE_CONFIG_DIR/mcp-config.json`
+- **Documentation**: `/workspace/examples/MCP_USAGE.md`
+
+#### Testing Playwright Installation
+
+```bash
+# Check Playwright is installed
+make test-playwright
+
+# Or manually
+python3 -c "import playwright; print('Playwright ready!')"
+npx playwright --version
+```
+
+#### Example Use Cases
+
+1. **Web Scraping**: Extract data from websites
+2. **Visual Testing**: Take screenshots for visual regression testing
+3. **Form Automation**: Fill and submit forms programmatically
+4. **Integration Testing**: Test web applications end-to-end
+5. **Data Collection**: Automate data gathering from multiple sources
+
+#### Environment Variables
+
+- `PLAYWRIGHT_BROWSERS_PATH=/ms-playwright` - Browser installation path
+- `PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=0` - Browser downloads enabled
+
+For detailed MCP usage instructions, see `/workspace/examples/MCP_USAGE.md`
+
 ## Docker Image
 
 ### Pre-built Base Image
@@ -232,6 +350,8 @@ defaults:
 The base image (`sandbox-claude-base:latest`) includes:
 - **Python 3.12** with common packages
 - **Node.js 20** with npm and common packages
+- **Playwright** with Chromium, Firefox, and WebKit browsers
+- **MCP Server** for browser automation through Claude
 - **Git** with global configuration
 - **GitHub CLI (gh)**
 - **Claude Code CLI**
@@ -344,6 +464,12 @@ make run-example    # Run an example sandbox session
 make release        # Create a release build and check with twine
 ```
 
+### Playwright
+```bash
+make test-playwright    # Test Playwright installation
+make install-playwright # Install Playwright dependencies (if needed)
+```
+
 ## Development
 
 ### Project Structure
@@ -356,21 +482,26 @@ sandbox_claude/
 │   ├── container_manager.py  # Docker operations with proper logging
 │   ├── session_store.py      # SQLite persistence with indexes
 │   ├── config_sync.py        # Bi-directional config management
-│   ├── constants.py          # Centralized constants (NEW!)
+│   ├── constants.py          # Centralized constants
 │   ├── utils.py              # Utility functions
 │   └── logging_config.py     # Logging configuration
 ├── docker/
-│   ├── Dockerfile            # Optimized multi-stage build
-│   ├── entrypoint.sh         # Container startup script
-│   ├── sync-claude-config.sh # Config push script
-│   └── pull-claude-config.sh # Config pull script
+│   ├── Dockerfile                 # Optimized multi-stage build with Playwright
+│   ├── entrypoint.sh              # Container startup script with MCP setup
+│   ├── sync-claude-config.sh      # Config push script
+│   ├── pull-claude-config.sh      # Config pull script
+│   ├── mcp-playwright-server.py   # MCP server for browser automation
+│   └── mcp-config.json            # MCP server configuration
+├── examples/
+│   ├── playwright_example.py      # Python Playwright example
+│   ├── playwright_example.js      # Node.js Playwright example
+│   └── MCP_USAGE.md               # MCP server usage guide
 ├── tests/
 │   ├── test_utils.py         # Utils tests
 │   ├── test_config_sync.py   # Config sync tests
 │   └── test_session_store.py # Database tests
-├── docs/                     # Documentation (if any)
-├── Makefile                  # Build automation
-├── pyproject.toml           # Modern Python packaging
+├── Makefile                  # Build automation with Playwright commands
+├── pyproject.toml           # Modern Python packaging with Playwright deps
 ├── setup.sh                  # Automated setup script
 └── README.md                 # This file
 ```
