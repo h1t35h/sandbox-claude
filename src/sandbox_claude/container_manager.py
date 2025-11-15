@@ -2,18 +2,29 @@
 Docker container management for sandbox-claude.
 """
 
+import datetime
+import io
 import os
 import subprocess
 import sys
+import tarfile
 from pathlib import Path
 from typing import Any, Optional
 
+import docker
 from docker.errors import APIError, DockerException, NotFound
 from docker.models.containers import Container
 from docker.types import Mount
 
-import docker
-
+from .constants import (
+    CONTAINER_LABEL_CREATED,
+    CONTAINER_LABEL_VERSION,
+    DEFAULT_DOCKER_IMAGE,
+    DEFAULT_DOCKER_USER,
+    DOCKER_BUILD_TIMEOUT_SECONDS,
+    DOCKER_STOP_TIMEOUT_SECONDS,
+    DOCKER_WORKSPACE_PATH,
+)
 from .logging_config import get_logger
 
 logger = get_logger(__name__)
@@ -31,7 +42,7 @@ class ContainerManager:
             logger.debug("Docker client initialized successfully")
         except DockerException as e:
             logger.error(f"Cannot connect to Docker daemon: {e}")
-            print("Error: Cannot connect to Docker. Is Docker running?")
+            logger.error("Error: Cannot connect to Docker. Is Docker running?")
             sys.exit(1)
 
     def image_exists(self, image_name: str) -> bool:
@@ -64,7 +75,6 @@ class ContainerManager:
 
         if not dockerfile_path.exists():
             logger.error(f"Dockerfile not found at {dockerfile_path}")
-            print(f"Dockerfile not found at {dockerfile_path}")
             return False
 
         try:
@@ -75,14 +85,15 @@ class ContainerManager:
                     "docker",
                     "build",
                     "-t",
-                    "sandbox-claude-base:latest",
+                    DEFAULT_DOCKER_IMAGE,
                     "-f",
                     str(dockerfile_path),
                     str(dockerfile_path.parent),
                 ],
-                check=False, capture_output=False,
+                check=False,
+                capture_output=False,
                 text=True,
-                timeout=600,  # 10 minute timeout
+                timeout=DOCKER_BUILD_TIMEOUT_SECONDS,
             )
             success = result.returncode == 0
             if success:
@@ -91,12 +102,11 @@ class ContainerManager:
                 logger.error(f"Build failed with exit code {result.returncode}")
             return success
         except subprocess.TimeoutExpired:
-            logger.error("Build timed out after 10 minutes")
-            print("Build timed out after 10 minutes")
+            timeout_minutes = DOCKER_BUILD_TIMEOUT_SECONDS // 60
+            logger.error(f"Build timed out after {timeout_minutes} minutes")
             return False
         except Exception as e:
             logger.error(f"Build failed with exception: {e}")
-            print(f"Build failed: {e}")
             return False
 
     def create_container(
@@ -135,8 +145,8 @@ class ContainerManager:
                 labels=labels or {},
                 environment=environment or {},
                 ports=ports or {},
-                working_dir="/workspace",
-                user="sandman",  # Use sandman user by default
+                working_dir=DOCKER_WORKSPACE_PATH,
+                user=DEFAULT_DOCKER_USER,
                 hostname=name.split("-")[-1][:12],  # Use part of name as hostname
             )
 
@@ -144,11 +154,9 @@ class ContainerManager:
 
         except APIError as e:
             logger.error(f"Failed to create container {name}: {e}")
-            print(f"Failed to create container: {e}")
             return None
         except Exception as e:
             logger.error(f"Unexpected error creating container {name}: {e}")
-            print(f"Failed to create container: {e}")
             return None
 
     def start_container(self, container_id: str) -> bool:
@@ -156,19 +164,27 @@ class ContainerManager:
         try:
             container = self.client.containers.get(container_id)
             container.start()
+            logger.info(f"Started container {container_id[:12]}")
             return True
-        except (NotFound, APIError) as e:
-            print(f"Failed to start container: {e}")
+        except NotFound as e:
+            logger.error(f"Container not found: {container_id[:12]} - {e}")
+            return False
+        except APIError as e:
+            logger.error(f"Failed to start container {container_id[:12]}: {e}")
             return False
 
     def stop_container(self, container_id: str) -> bool:
         """Stop a Docker container."""
         try:
             container = self.client.containers.get(container_id)
-            container.stop(timeout=10)
+            container.stop(timeout=DOCKER_STOP_TIMEOUT_SECONDS)
+            logger.info(f"Stopped container {container_id[:12]}")
             return True
-        except (NotFound, APIError) as e:
-            print(f"Failed to stop container: {e}")
+        except NotFound as e:
+            logger.error(f"Container not found: {container_id[:12]} - {e}")
+            return False
+        except APIError as e:
+            logger.error(f"Failed to stop container {container_id[:12]}: {e}")
             return False
 
     def remove_container(self, container_id: str) -> bool:
@@ -176,9 +192,13 @@ class ContainerManager:
         try:
             container = self.client.containers.get(container_id)
             container.remove(force=True)
+            logger.info(f"Removed container {container_id[:12]}")
             return True
-        except (NotFound, APIError) as e:
-            print(f"Failed to remove container: {e}")
+        except NotFound:
+            logger.warning(f"Container not found (may already be removed): {container_id[:12]}")
+            return False
+        except APIError as e:
+            logger.error(f"Failed to remove container {container_id[:12]}: {e}")
             return False
 
     def get_container_status(self, container_id: str) -> str:
@@ -194,18 +214,19 @@ class ContainerManager:
     def attach_to_container(self, container_id: str) -> None:
         """Attach to a running container (interactive shell)."""
         try:
-            # Use subprocess for proper TTY handling, run as sandman user
+            # Use subprocess for proper TTY handling
             subprocess.run(
-                ["docker", "exec", "-it", "-u", "sandman", container_id, "/bin/bash"], check=False,
+                ["docker", "exec", "-it", "-u", DEFAULT_DOCKER_USER, container_id, "/bin/bash"],
+                check=False,
             )
         except Exception as e:
-            print(f"Failed to attach to container: {e}")
+            logger.error(f"Failed to attach to container {container_id[:12]}: {e}")
 
     def exec_command(self, container_id: str, command: str) -> dict[str, Any]:
         """Execute a command in a container."""
         try:
             container = self.client.containers.get(container_id)
-            result = container.exec_run(command, demux=True, user="sandman")
+            result = container.exec_run(command, demux=True, user=DEFAULT_DOCKER_USER)
 
             stdout, stderr = result.output if result.output else (None, None)
 
@@ -214,7 +235,15 @@ class ContainerManager:
                 "stdout": stdout.decode("utf-8") if stdout else "",
                 "stderr": stderr.decode("utf-8") if stderr else "",
             }
-        except (NotFound, APIError) as e:
+        except NotFound as e:
+            logger.error(f"Container not found: {container_id[:12]}")
+            return {
+                "exit_code": 1,
+                "stdout": "",
+                "stderr": f"Container not found: {str(e)}",
+            }
+        except APIError as e:
+            logger.error(f"Failed to execute command in container {container_id[:12]}: {e}")
             return {
                 "exit_code": 1,
                 "stdout": "",
@@ -225,10 +254,12 @@ class ContainerManager:
         """List all sandbox-claude containers."""
         try:
             containers: list[Container] = self.client.containers.list(
-                all=True, filters={"label": "sandbox.claude.version"},
+                all=True,
+                filters={"label": CONTAINER_LABEL_VERSION},
             )
             return containers
-        except APIError:
+        except APIError as e:
+            logger.error(f"Failed to list containers: {e}")
             return []
 
     def get_container_logs(self, container_id: str, tail: int = 100) -> str:
@@ -237,7 +268,11 @@ class ContainerManager:
             container = self.client.containers.get(container_id)
             logs: str = container.logs(tail=tail).decode("utf-8")
             return logs
-        except (NotFound, APIError):
+        except NotFound:
+            logger.warning(f"Container not found for logs: {container_id[:12]}")
+            return ""
+        except APIError as e:
+            logger.error(f"Failed to get logs for container {container_id[:12]}: {e}")
             return ""
 
     def copy_to_container(self, container_id: str, src: Path, dest: str) -> bool:
@@ -246,38 +281,44 @@ class ContainerManager:
             container = self.client.containers.get(container_id)
 
             # Create tar archive of source
-            import io
-            import tarfile
-
             tar_stream = io.BytesIO()
             with tarfile.open(fileobj=tar_stream, mode="w") as tar:
                 tar.add(src, arcname=os.path.basename(src))
 
             tar_stream.seek(0)
             container.put_archive(dest, tar_stream)
+            logger.debug(f"Copied {src} to container {container_id[:12]}:{dest}")
             return True
 
-        except (NotFound, APIError) as e:
-            print(f"Failed to copy to container: {e}")
+        except NotFound:
+            logger.error(f"Container not found: {container_id[:12]}")
+            return False
+        except APIError as e:
+            logger.error(f"Failed to copy to container {container_id[:12]}: {e}")
             return False
 
     def cleanup_old_containers(self, days: int = 7) -> int:
         """Remove containers older than specified days."""
-        import datetime
-
         removed_count = 0
         cutoff_date = datetime.datetime.now() - datetime.timedelta(days=days)
 
         for container in self.list_sandbox_containers():
             if container.status == "exited":
-                created_str = container.labels.get("sandbox.claude.created", "")
+                created_str = container.labels.get(CONTAINER_LABEL_CREATED, "")
                 if created_str:
                     try:
                         created_date = datetime.datetime.fromisoformat(created_str)
                         if created_date < cutoff_date:
                             container.remove()
                             removed_count += 1
-                    except (ValueError, APIError):
-                        pass
+                            logger.info(
+                                f"Cleaned up old container: {container.name} "
+                                f"(created: {created_str})"
+                            )
+                    except ValueError:
+                        logger.warning(f"Invalid date format in container label: {created_str}")
+                    except APIError as e:
+                        logger.error(f"Failed to remove old container {container.name}: {e}")
 
+        logger.info(f"Cleanup complete: removed {removed_count} container(s)")
         return removed_count

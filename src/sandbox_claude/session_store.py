@@ -7,6 +7,7 @@ import sqlite3
 from pathlib import Path
 from typing import Any, Optional
 
+from .constants import DEFAULT_CLEANUP_DAYS
 from .logging_config import get_logger
 
 logger = get_logger(__name__)
@@ -119,9 +120,14 @@ class SessionStore:
                     ),
                 )
                 conn.commit()
+                logger.info(f"Added container {container_name} ({container_id[:12]}) to store")
                 return True
         except sqlite3.IntegrityError:
             # Container already exists
+            logger.warning(f"Container {container_id[:12]} already exists in store")
+            return False
+        except sqlite3.Error as e:
+            logger.error(f"Failed to add container to store: {e}")
             return False
 
     def get_container(self, container_id: str) -> Optional[dict[str, Any]]:
@@ -184,7 +190,7 @@ class SessionStore:
     ) -> list[dict[str, Any]]:
         """List containers with optional filters."""
         query = "SELECT * FROM sandboxes WHERE 1=1"
-        params = []
+        params: list[Any] = []
 
         if project:
             query += " AND project_name = ?"
@@ -202,7 +208,7 @@ class SessionStore:
 
         if limit:
             query += " LIMIT ?"
-            params.append(str(limit))
+            params.append(limit)  # Fixed: use int directly, not str(limit)
 
         with sqlite3.connect(self.db_path) as conn:
             conn.row_factory = sqlite3.Row
@@ -224,8 +230,12 @@ class SessionStore:
                     (status, container_id),
                 )
                 conn.commit()
-                return conn.total_changes > 0
-        except sqlite3.Error:
+                updated = conn.total_changes > 0
+                if updated:
+                    logger.debug(f"Updated container {container_id[:12]} status to {status}")
+                return updated
+        except sqlite3.Error as e:
+            logger.error(f"Failed to update container status: {e}")
             return False
 
     def update_last_accessed(self, container_id: str) -> bool:
@@ -242,7 +252,8 @@ class SessionStore:
                 )
                 conn.commit()
                 return conn.total_changes > 0
-        except sqlite3.Error:
+        except sqlite3.Error as e:
+            logger.error(f"Failed to update last accessed time: {e}")
             return False
 
     def remove_container(self, container_id: str) -> bool:
@@ -256,8 +267,12 @@ class SessionStore:
                     (container_id,),
                 )
                 conn.commit()
-                return conn.total_changes > 0
-        except sqlite3.Error:
+                removed = conn.total_changes > 0
+                if removed:
+                    logger.info(f"Removed container {container_id[:12]} from store")
+                return removed
+        except sqlite3.Error as e:
+            logger.error(f"Failed to remove container from store: {e}")
             return False
 
     def get_statistics(self) -> dict[str, Any]:
@@ -302,7 +317,7 @@ class SessionStore:
                 "recent": recent,
             }
 
-    def cleanup_old_records(self, days: int = 30) -> int:
+    def cleanup_old_records(self, days: int = DEFAULT_CLEANUP_DAYS) -> int:
         """Remove records older than specified days."""
         try:
             with sqlite3.connect(self.db_path) as conn:
@@ -316,8 +331,11 @@ class SessionStore:
                     (-days,),
                 )
                 conn.commit()
-                return cursor.rowcount
-        except sqlite3.Error:
+                removed_count = cursor.rowcount
+                logger.info(f"Cleaned up {removed_count} old records (older than {days} days)")
+                return removed_count
+        except sqlite3.Error as e:
+            logger.error(f"Failed to cleanup old records: {e}")
             return 0
 
     def export_sessions(self, output_path: Path) -> bool:
@@ -326,8 +344,10 @@ class SessionStore:
             sessions = self.list_containers()
             with open(output_path, "w") as f:
                 json.dump(sessions, f, indent=2, default=str)
+            logger.info(f"Exported {len(sessions)} sessions to {output_path}")
             return True
-        except Exception:
+        except (OSError, TypeError) as e:
+            logger.error(f"Failed to export sessions: {e}")
             return False
 
     def import_sessions(self, input_path: Path) -> int:
@@ -349,6 +369,8 @@ class SessionStore:
                 ):
                     imported += 1
 
+            logger.info(f"Imported {imported} sessions from {input_path}")
             return imported
-        except Exception:
+        except (OSError, json.JSONDecodeError, KeyError) as e:
+            logger.error(f"Failed to import sessions: {e}")
             return 0

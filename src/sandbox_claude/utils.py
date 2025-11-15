@@ -2,11 +2,28 @@
 Utility functions for sandbox-claude.
 """
 
+import os
+import platform
 import re
 import secrets
+import subprocess
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
+
+import yaml
+
+from .constants import (
+    BYTES_PER_KB,
+    CONTAINER_NAME_PREFIX,
+    DAYS_FOR_OLD_TIMESTAMP,
+    MAX_NAME_LENGTH,
+    MAX_NAME_LENGTH_SANITIZED,
+    MIN_NAME_LENGTH,
+    NAME_VALIDATION_PATTERN,
+    SECONDS_PER_HOUR,
+    SECONDS_PER_MINUTE,
+)
 
 
 def get_git_worktree_info(path: Path) -> tuple[bool, Optional[Path]]:
@@ -63,7 +80,7 @@ def generate_container_name(project: str, feature: str) -> str:
     project_clean = sanitize_name(project)
     feature_clean = sanitize_name(feature)
 
-    return f"sandbox-claude-{project_clean}-{feature_clean}-{timestamp}-{random_suffix}"
+    return f"{CONTAINER_NAME_PREFIX}-{project_clean}-{feature_clean}-{timestamp}-{random_suffix}"
 
 
 def sanitize_name(name: str) -> str:
@@ -77,8 +94,8 @@ def sanitize_name(name: str) -> str:
     # Remove leading/trailing hyphens
     sanitized = sanitized.strip("-")
     # Truncate if too long
-    if len(sanitized) > 30:
-        sanitized = sanitized[:30]
+    if len(sanitized) > MAX_NAME_LENGTH_SANITIZED:
+        sanitized = sanitized[:MAX_NAME_LENGTH_SANITIZED]
 
     return sanitized.lower()
 
@@ -89,12 +106,11 @@ def validate_name(name: str) -> bool:
         return False
 
     # Check length constraints
-    if len(name) < 1 or len(name) > 50:
+    if len(name) < MIN_NAME_LENGTH or len(name) > MAX_NAME_LENGTH:
         return False
 
     # Only allow alphanumeric, hyphens, and underscores
-    pattern = r"^[a-zA-Z0-9-_]+$"
-    return bool(re.match(pattern, name))
+    return bool(re.match(NAME_VALIDATION_PATTERN, name))
 
 
 def format_timestamp(timestamp: str) -> str:
@@ -107,29 +123,30 @@ def format_timestamp(timestamp: str) -> str:
         now = datetime.now()
         diff = now - dt.replace(tzinfo=None)
 
-        if diff.days > 7:
+        if diff.days > DAYS_FOR_OLD_TIMESTAMP:
             return dt.strftime("%Y-%m-%d")
         if diff.days > 0:
             return f"{diff.days} day{'s' if diff.days > 1 else ''} ago"
-        if diff.seconds > 3600:
-            hours = diff.seconds // 3600
+        if diff.seconds > SECONDS_PER_HOUR:
+            hours = diff.seconds // SECONDS_PER_HOUR
             return f"{hours} hour{'s' if hours > 1 else ''} ago"
-        if diff.seconds > 60:
-            minutes = diff.seconds // 60
+        if diff.seconds > SECONDS_PER_MINUTE:
+            minutes = diff.seconds // SECONDS_PER_MINUTE
             return f"{minutes} minute{'s' if minutes > 1 else ''} ago"
         return "just now"
     except (ValueError, TypeError, AttributeError):
         # Return the original timestamp if it's a reasonable length, otherwise "invalid"
-        return timestamp if len(timestamp) <= 30 else "invalid timestamp"
+        max_display_length = 30
+        return timestamp if len(timestamp) <= max_display_length else "invalid timestamp"
 
 
 def format_size(size_bytes: int) -> str:
     """Format bytes as human-readable size."""
     size_float = float(size_bytes)
     for unit in ["B", "KB", "MB", "GB", "TB"]:
-        if size_float < 1024.0:
+        if size_float < BYTES_PER_KB:
             return f"{size_float:.1f} {unit}"
-        size_float /= 1024.0
+        size_float /= BYTES_PER_KB
     return f"{size_float:.1f} PB"
 
 
@@ -151,10 +168,10 @@ def get_docker_socket() -> Optional[Path]:
 
 def check_docker_installed() -> bool:
     """Check if Docker is installed and accessible."""
-    import subprocess
-
     try:
-        result = subprocess.run(["docker", "--version"], check=False, capture_output=True, text=True, timeout=5)
+        result = subprocess.run(
+            ["docker", "--version"], check=False, capture_output=True, text=True, timeout=5
+        )
         return result.returncode == 0
     except (subprocess.SubprocessError, FileNotFoundError):
         return False
@@ -162,10 +179,10 @@ def check_docker_installed() -> bool:
 
 def check_docker_running() -> bool:
     """Check if Docker daemon is running."""
-    import subprocess
-
     try:
-        result = subprocess.run(["docker", "info"], check=False, capture_output=True, text=True, timeout=5)
+        result = subprocess.run(
+            ["docker", "info"], check=False, capture_output=True, text=True, timeout=5
+        )
         return result.returncode == 0
     except (subprocess.SubprocessError, FileNotFoundError):
         return False
@@ -173,9 +190,6 @@ def check_docker_running() -> bool:
 
 def get_host_info() -> dict[str, str]:
     """Get information about the host system."""
-    import os
-    import platform
-
     return {
         "platform": platform.system(),
         "platform_version": platform.version(),
@@ -261,11 +275,12 @@ def load_project_config(project_root: Path) -> Optional[dict[str, Any]]:
         return None
 
     try:
-        import yaml
-
         with open(config_file) as f:
             config: dict[str, Any] = yaml.safe_load(f)
             return config
+    except (yaml.YAMLError, OSError):
+        # Log the error but return None for backward compatibility
+        return None
     except Exception:
         return None
 

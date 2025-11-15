@@ -10,10 +10,11 @@ from pathlib import Path
 from typing import Any, Optional
 
 import click
-from docker.models.containers import Container
 from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich.table import Table
+
+from docker.models.containers import Container
 
 from .config_sync import ConfigSync
 from .container_manager import ContainerManager
@@ -135,7 +136,8 @@ def _sync_container_statuses(project: Optional[str] = None) -> None:
 
 
 def _get_containers_to_remove(
-    project: Optional[str], all_containers: bool,
+    project: Optional[str],
+    all_containers: bool,
 ) -> builtin_list[dict[str, Any]]:
     """Get list of containers to remove based on filters."""
     removable_statuses = ["stopped", "exited", "not_found", "error"]
@@ -289,7 +291,8 @@ def _prepare_mounts(no_mount_config: bool) -> dict[str, dict[str, Any]]:
 
 
 def _find_container_by_project_feature(
-    project: Optional[str], feature: Optional[str],
+    project: Optional[str],
+    feature: Optional[str],
 ) -> Optional[str]:
     """Find container ID by project and/or feature."""
     container = store.find_container(project=project, feature=feature, status="running")
@@ -350,7 +353,13 @@ def new(
         # Prepare mounts and create container
         mounts = _prepare_mounts(no_mount_config)
         container = _create_and_start_container(
-            container_name, image, project, feature, mounts, progress, task,
+            container_name,
+            image,
+            project,
+            feature,
+            mounts,
+            progress,
+            task,
         )
 
     # Success output
@@ -488,7 +497,8 @@ def stop(container_ref: Optional[str], project: Optional[str], all: bool) -> Non
         console=console,
     ) as progress:
         task = progress.add_task(
-            f"Stopping {len(containers_to_stop)} container(s)...", total=len(containers_to_stop),
+            f"Stopping {len(containers_to_stop)} container(s)...",
+            total=len(containers_to_stop),
         )
 
         for container_id in containers_to_stop:

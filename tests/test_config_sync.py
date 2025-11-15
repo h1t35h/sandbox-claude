@@ -2,10 +2,12 @@
 Tests for configuration synchronization.
 """
 
-import pytest
-import tempfile
 import json
+import tempfile
 from pathlib import Path
+
+import pytest
+
 from sandbox_claude.config_sync import ConfigSync
 
 

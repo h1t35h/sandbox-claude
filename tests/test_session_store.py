@@ -2,9 +2,11 @@
 Tests for session store functionality.
 """
 
-import pytest
 import tempfile
 from pathlib import Path
+
+import pytest
+
 from sandbox_claude.session_store import SessionStore
 
 

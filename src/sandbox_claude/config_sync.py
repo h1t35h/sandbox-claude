@@ -9,6 +9,19 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
+from .constants import (
+    BACKUP_IGNORE_PATTERNS,
+    CLAUDE_CONFIG_DIR_NAME,
+    CLAUDE_CONFIG_FILE_NAME,
+    CONTAINER_CLAUDE_CONFIG_PATH,
+    CONTAINER_TEMP_CLAUDE_JSON_HOST,
+    SANDBOX_CONFIG_DIR_NAME,
+    SENSITIVE_FILE_PERMISSION_MASK,
+)
+from .logging_config import get_logger
+
+logger = get_logger(__name__)
+
 
 class ConfigSync:
     """Manages configuration synchronization between host and containers."""
@@ -16,12 +29,13 @@ class ConfigSync:
     def __init__(self) -> None:
         """Initialize configuration sync manager."""
         self.home_dir = Path.home()
-        self.claude_config_dir = self.home_dir / ".claude"
-        self.claude_json = self.home_dir / ".claude.json"
-        self.sandbox_config_dir = self.home_dir / ".sandbox_claude"
+        self.claude_config_dir = self.home_dir / CLAUDE_CONFIG_DIR_NAME
+        self.claude_json = self.home_dir / CLAUDE_CONFIG_FILE_NAME
+        self.sandbox_config_dir = self.home_dir / SANDBOX_CONFIG_DIR_NAME
 
         # Ensure sandbox config directory exists
         self.sandbox_config_dir.mkdir(parents=True, exist_ok=True)
+        logger.debug(f"ConfigSync initialized with sandbox dir: {self.sandbox_config_dir}")
 
     def check_claude_config(self) -> dict[str, bool]:
         """Check which Claude configuration files exist."""
@@ -54,10 +68,11 @@ class ConfigSync:
         if self.claude_config_dir.exists():
             mounts["claude_config"] = {
                 "source": str(self.claude_config_dir),
-                "target": "/root/.claude",
+                "target": CONTAINER_CLAUDE_CONFIG_PATH,
                 "type": "bind",
                 "read_only": True,
             }
+            logger.debug(f"Prepared claude config mount for container {container_id[:12]}")
 
         # Check for .claude.json
         # Mount to a temporary location so entrypoint can copy it
@@ -65,10 +80,11 @@ class ConfigSync:
         if self.claude_json.exists():
             mounts["claude_json_host"] = {
                 "source": str(self.claude_json),
-                "target": "/tmp/.claude.json.host",
+                "target": CONTAINER_TEMP_CLAUDE_JSON_HOST,
                 "type": "bind",
                 "read_only": True,
             }
+            logger.debug(f"Prepared claude.json mount for container {container_id[:12]}")
 
         return mounts
 
@@ -116,10 +132,10 @@ class ConfigSync:
             for sensitive in sensitive_files:
                 if sensitive in file_path.name.lower():
                     stat_info = file_path.stat()
-                    if stat_info.st_mode & 0o077:
-                        results["warnings"].append(
-                            f"Sensitive file {file_path.name} has permissive permissions",
-                        )
+                    if stat_info.st_mode & SENSITIVE_FILE_PERMISSION_MASK:
+                        warning_msg = f"Sensitive file {file_path.name} has permissive permissions"
+                        results["warnings"].append(warning_msg)
+                        logger.warning(warning_msg)
 
     def validate_config(self) -> dict[str, Any]:
         """Validate Claude configuration files."""
@@ -144,13 +160,15 @@ class ConfigSync:
         if self.claude_config_dir.exists():
             shutil.copytree(
                 self.claude_config_dir,
-                backup_dir / ".claude",
-                ignore=shutil.ignore_patterns("*.log", "*.tmp", "__pycache__"),
+                backup_dir / CLAUDE_CONFIG_DIR_NAME,
+                ignore=shutil.ignore_patterns(*BACKUP_IGNORE_PATTERNS),
             )
+            logger.info(f"Backed up {CLAUDE_CONFIG_DIR_NAME} directory")
 
         # Backup .claude.json
         if self.claude_json.exists():
-            shutil.copy2(self.claude_json, backup_dir / ".claude.json")
+            shutil.copy2(self.claude_json, backup_dir / CLAUDE_CONFIG_FILE_NAME)
+            logger.info(f"Backed up {CLAUDE_CONFIG_FILE_NAME} file")
 
         # Create backup metadata
         metadata = {
@@ -162,29 +180,34 @@ class ConfigSync:
         with open(backup_dir / "backup_metadata.json", "w") as f:
             json.dump(metadata, f, indent=2)
 
+        logger.info(f"Config backup created at {backup_dir}")
         return backup_dir
 
     def restore_config(self, backup_path: Path) -> bool:
         """Restore Claude configuration from backup."""
         if not backup_path.exists():
+            logger.error(f"Backup path does not exist: {backup_path}")
             return False
 
         try:
             # Restore .claude directory
-            claude_backup = backup_path / ".claude"
+            claude_backup = backup_path / CLAUDE_CONFIG_DIR_NAME
             if claude_backup.exists():
                 if self.claude_config_dir.exists():
                     shutil.rmtree(self.claude_config_dir)
                 shutil.copytree(claude_backup, self.claude_config_dir)
+                logger.info(f"Restored {CLAUDE_CONFIG_DIR_NAME} directory")
 
             # Restore .claude.json
-            json_backup = backup_path / ".claude.json"
+            json_backup = backup_path / CLAUDE_CONFIG_FILE_NAME
             if json_backup.exists():
                 shutil.copy2(json_backup, self.claude_json)
+                logger.info(f"Restored {CLAUDE_CONFIG_FILE_NAME} file")
 
+            logger.info(f"Config restored from {backup_path}")
             return True
-        except Exception as e:
-            print(f"Error restoring config: {e}")
+        except (OSError, shutil.Error) as e:
+            logger.error(f"Error restoring config: {e}")
             return False
 
     def create_default_config(self) -> bool:
@@ -211,6 +234,7 @@ Add your project-specific settings here.
 Define custom commands for your workflow.
 """,
             )
+            logger.info(f"Created default {CLAUDE_CONFIG_DIR_NAME} directory with CLAUDE.md")
             created = True
 
         # Create .claude.json template if it doesn't exist
@@ -225,8 +249,8 @@ Define custom commands for your workflow.
             with open(self.claude_json, "w") as f:
                 json.dump(template, f, indent=2)
 
-            print(f"Created template .claude.json at {self.claude_json}")
-            print("Please add your API key to this file.")
+            logger.info(f"Created template {CLAUDE_CONFIG_FILE_NAME} at {self.claude_json}")
+            logger.warning("Please add your API key to this file")
             created = True
 
         return created

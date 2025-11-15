@@ -2,16 +2,14 @@
 Tests for utility functions.
 """
 
-import pytest
-from pathlib import Path
 from sandbox_claude.utils import (
+    format_size,
+    format_timestamp,
     generate_container_name,
+    parse_environment,
+    parse_ports,
     sanitize_name,
     validate_name,
-    format_timestamp,
-    format_size,
-    parse_ports,
-    parse_environment,
 )
 
 
