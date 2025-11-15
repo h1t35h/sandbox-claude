@@ -20,7 +20,7 @@ from .config_sync import ConfigSync
 from .container_manager import ContainerManager
 from .logging_config import get_logger, setup_logging
 from .session_store import SessionStore
-from .utils import format_timestamp, generate_container_name, get_git_worktree_info, validate_name
+from .utils import format_timestamp, generate_container_name, validate_name
 
 logger = get_logger(__name__)
 
@@ -192,32 +192,6 @@ def _add_workspace_mount(mounts: dict[str, dict[str, Any]]) -> None:
     }
 
 
-def _add_git_worktree_mount(mounts: dict[str, dict[str, Any]]) -> None:
-    """Add git worktree mount if applicable."""
-    current_dir = Path(os.getcwd())
-    is_worktree, main_git_dir = get_git_worktree_info(current_dir)
-
-    if not (is_worktree and main_git_dir):
-        return
-
-    # Verify the main git directory exists and is accessible
-    if main_git_dir.exists() and main_git_dir.is_dir():
-        # Mount the main .git directory as READ-ONLY to prevent breaking host worktree
-        mounts["main_git"] = {
-            "source": str(main_git_dir),
-            "target": "/workspace/.git_main",
-            "type": "bind",
-            "read_only": True,  # Critical: prevent modifications to host git metadata
-        }
-        console.print("[dim]Detected git worktree, mounting main repository (read-only)[/dim]")
-        logger.info(f"Mounted git worktree main directory: {main_git_dir}")
-    else:
-        console.print(
-            "[yellow]Warning: Git worktree detected but main repository not accessible[/yellow]",
-        )
-        logger.warning(f"Git worktree detected but main repository not accessible: {main_git_dir}")
-
-
 def _add_claude_config_mounts(mounts: dict[str, dict[str, Any]]) -> None:
     """Add Claude configuration mounts."""
     # Create a shared config directory that's writable
@@ -278,9 +252,6 @@ def _prepare_mounts(no_mount_config: bool) -> dict[str, dict[str, Any]]:
 
     # Add workspace mount
     _add_workspace_mount(mounts)
-
-    # Add git worktree mount if applicable
-    _add_git_worktree_mount(mounts)
 
     # Add Claude configuration mounts if not disabled
     if not no_mount_config:

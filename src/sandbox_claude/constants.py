@@ -36,7 +36,6 @@ CONTAINER_HOST_CONFIG_MOUNT = "/host-claude-config"
 CONTAINER_TEMP_CLAUDE_HOST = "/tmp/.claude.host"
 CONTAINER_TEMP_CLAUDE_JSON_HOST = "/tmp/.claude.json.host"
 CONTAINER_TEMP_CLAUDE_CREDS_HOST = "/tmp/.claude_creds.json.host"
-CONTAINER_GIT_MAIN_MOUNT = "/workspace/.git_main"
 
 # Name validation and sanitization
 MAX_NAME_LENGTH_SANITIZED = 30

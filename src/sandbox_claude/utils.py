@@ -26,50 +26,6 @@ from .constants import (
 )
 
 
-def get_git_worktree_info(path: Path) -> tuple[bool, Optional[Path]]:
-    """Check if a directory is a git worktree and return the main git directory.
-
-    Returns:
-        (is_worktree, main_git_dir)
-        - is_worktree: True if the path is a git worktree
-        - main_git_dir: Path to the main git directory if it's a worktree, None otherwise
-    """
-    git_path = path / ".git"
-
-    if not git_path.exists():
-        return False, None
-
-    # If .git is a directory, it's not a worktree
-    if git_path.is_dir():
-        return False, None
-
-    # If .git is a file, it's likely a worktree
-    try:
-        with open(git_path) as f:
-            content = f.read().strip()
-            # Format is usually: gitdir: /path/to/main/.git/worktrees/worktree-name
-            if content.startswith("gitdir:"):
-                gitdir_path = content.split("gitdir:", 1)[1].strip()
-                gitdir = Path(gitdir_path)
-
-                # The main git directory is two levels up from the worktree git directory
-                # e.g., /path/to/main/.git/worktrees/name -> /path/to/main/.git
-                if gitdir.exists() and "worktrees" in gitdir.parts:
-                    # Find the .git directory (parent of worktrees)
-                    for i, part in enumerate(gitdir.parts):
-                        if part == "worktrees" and i > 0:
-                            # Check if the previous part is .git (exact match) or ends with .git
-                            prev_part = gitdir.parts[i - 1]
-                            if prev_part == ".git" or prev_part.endswith(".git"):
-                                main_git_dir = Path(*gitdir.parts[:i])
-                                return True, main_git_dir
-
-    except Exception:
-        pass
-
-    return False, None
-
-
 def generate_container_name(project: str, feature: str) -> str:
     """Generate a unique container name."""
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")

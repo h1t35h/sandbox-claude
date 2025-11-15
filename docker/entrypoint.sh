@@ -208,135 +208,6 @@ list_config_files() {
 }
 
 # ================================================================================
-# CLEANUP FUNCTIONS
-# ================================================================================
-
-# Clean up function for container exit
-cleanup_on_exit() {
-    # Clean up temporary git directories if they exist
-    if [ -d "/workspace/.git_container" ]; then
-        rm -rf /workspace/.git_container 2>/dev/null || true
-    fi
-    # Restore original .git file if we modified it
-    if [ -n "$ORIG_GIT_CONTENT" ] && [ -f "/workspace/.git" ]; then
-        echo "$ORIG_GIT_CONTENT" > /workspace/.git 2>/dev/null || true
-    fi
-}
-
-# ================================================================================
-# GIT WORKTREE HANDLING
-# ================================================================================
-
-# Setup git worktree in container
-setup_git_worktree() {
-    local orig_git_content="$1"
-    
-    print_info "Git worktree detected"
-    
-    # Save the original .git content (make it global for cleanup)
-    export ORIG_GIT_CONTENT="$orig_git_content"
-    
-    # Check if main git directory was mounted (read-only)
-    if [ ! -d "/workspace/.git_main" ]; then
-        convert_to_standalone_repo
-        return 0
-    fi
-    
-    print_info "Creating container-local git metadata copy..."
-    
-    # Remove any existing .git_container first to ensure clean state
-    rm -rf /workspace/.git_container 2>/dev/null || true
-    
-    # Copy the read-only git metadata to a writable location
-    if ! cp -r /workspace/.git_main /workspace/.git_container 2>/dev/null; then
-        print_error "Failed to copy git metadata"
-        convert_to_standalone_repo
-        return 0
-    fi
-    
-    # Ensure .git_container is writable
-    chmod -R u+w /workspace/.git_container 2>/dev/null || true
-    
-    # Configure worktree paths
-    configure_worktree_paths "$orig_git_content"
-    
-    # Verify git setup
-    verify_git_setup
-}
-
-# Configure worktree paths in container
-configure_worktree_paths() {
-    local orig_content="$1"
-    
-    # Read the original .git file to get the worktree path
-    local orig_gitdir=$(echo "$orig_content" | sed 's/gitdir: //')
-    
-    # Extract just the worktree directory name (last component)
-    local worktree_name=$(basename "$orig_gitdir")
-    
-    # Check if the worktree directory exists in the copied git directory
-    if [ -d "/workspace/.git_container/worktrees/$worktree_name" ]; then
-        # Update the .git file to point to the container copy
-        echo "gitdir: /workspace/.git_container/worktrees/$worktree_name" > .git
-        
-        # Update the gitdir file in the container copy to point to container paths
-        echo "/workspace/.git" > "/workspace/.git_container/worktrees/$worktree_name/gitdir"
-        
-        print_success "Git worktree configuration adapted for container"
-    else
-        find_alternative_worktree
-    fi
-}
-
-# Find alternative worktree if primary not found
-find_alternative_worktree() {
-    print_info "Looking for worktree in copied git directory..."
-    
-    if [ ! -d "/workspace/.git_container/worktrees" ]; then
-        print_warning "Worktrees directory not found in copied git"
-        convert_to_standalone_repo
-        return
-    fi
-    
-    # List available worktrees
-    local available_worktree=$(ls -1 /workspace/.git_container/worktrees 2>/dev/null | head -n 1)
-    
-    if [ -n "$available_worktree" ]; then
-        echo "gitdir: /workspace/.git_container/worktrees/$available_worktree" > .git
-        echo "/workspace/.git" > "/workspace/.git_container/worktrees/$available_worktree/gitdir"
-        print_success "Git worktree configuration adapted (using: $available_worktree)"
-    else
-        print_warning "No worktrees found in copied git directory"
-        convert_to_standalone_repo
-    fi
-}
-
-# Convert to standalone git repository
-convert_to_standalone_repo() {
-    print_info "Converting to standalone git repository"
-    rm -f .git 2>/dev/null || true
-    rm -rf .git_container 2>/dev/null || true
-    git init
-    git add .
-    echo "  Git repository initialized (standalone)"
-}
-
-# Verify git setup is working
-verify_git_setup() {
-    if git status >/dev/null 2>&1; then
-        echo "  Git repository (worktree) detected:"
-        echo "    • Branch: $(git branch --show-current 2>/dev/null || echo 'detached')"
-        echo "    • Status: $(git status --porcelain 2>/dev/null | wc -l) modified files"
-        # Add .git_container and .git_main to local git exclusions
-        echo ".git_main" >> .git/info/exclude 2>/dev/null || true
-        echo ".git_container" >> .git/info/exclude 2>/dev/null || true
-    else
-        print_warning "Git status check failed - reinitializing as standalone repository"
-        convert_to_standalone_repo
-    fi
-}
-
-# ================================================================================
 # WORKSPACE SETUP
 # ================================================================================
 
@@ -346,20 +217,17 @@ setup_workspace() {
         print_error "Workspace directory not found"
         return 1
     fi
-    
+
     cd /workspace
     print_success "Workspace mounted at /workspace"
-    
-    # Check if it's a git worktree (when .git is a file)
-    if [ -f ".git" ]; then
-        local git_content=$(cat .git)
-        setup_git_worktree "$git_content"
-    elif [ -d ".git" ]; then
+
+    # Check if it's a git repository
+    if [ -d ".git" ] || [ -f ".git" ]; then
         echo "  Git repository detected:"
         echo "    • Branch: $(git branch --show-current 2>/dev/null || echo 'detached')"
         echo "    • Status: $(git status --porcelain 2>/dev/null | wc -l) modified files"
     fi
-    
+
     detect_project_type
 }
 
@@ -383,8 +251,8 @@ setup_git_config() {
         print_info "Setting up Git global configuration..."
         git config --global user.email "sandbox@claude.local" 2>/dev/null || true
         git config --global user.name "Sandbox Claude" 2>/dev/null || true
-        git config --global init.defaultBranch main 2>/dev/null || true
-        git config --global safe.directory /workspace 2>/dev/null || true
+        # Note: init.defaultBranch, safe.directory, and core.excludesfile are set in Dockerfile
+        # Only set user identity here to avoid overriding Dockerfile settings
     fi
 }
 
@@ -507,10 +375,7 @@ main() {
     load_shared_host_config
     setup_claude_config_files
     list_config_files
-    
-    # Setup cleanup trap
-    trap cleanup_on_exit EXIT
-    
+
     # Setup workspace and git
     setup_workspace
     setup_git_config

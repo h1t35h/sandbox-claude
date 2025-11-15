@@ -113,6 +113,18 @@ RUN groupadd -g 1000 sandman \
     && usermod -aG sudo sandman \
     && echo "sandman ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
 
+# Setup global gitignore for container-specific directories
+RUN echo "# Sandbox-specific files" > /etc/gitignore && \
+    echo ".sandbox_history" >> /etc/gitignore && \
+    echo ".claude-config/" >> /etc/gitignore
+
+# Configure global git settings for both users
+RUN for user_home in /root /home/sandman; do \
+        git config --file $user_home/.gitconfig core.excludesfile /etc/gitignore && \
+        git config --file $user_home/.gitconfig init.defaultBranch main && \
+        git config --file $user_home/.gitconfig safe.directory '*'; \
+    done
+
 # Setup shell environment for both users
 RUN for user_home in /root /home/sandman; do \
         echo 'export PS1="\[\033[1;36m\]sandbox-claude\[\033[0m\]:\[\033[1;34m\]\w\[\033[0m\]$ "' >> $user_home/.bashrc && \
