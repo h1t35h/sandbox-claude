@@ -140,18 +140,18 @@ copy_config_file() {
 load_shared_host_config() {
     if [ -d "/host-claude-config" ] && [ -r "/host-claude-config" ]; then
         print_info "Checking shared host config directory for updates..."
-        
+
         copy_config_file "/host-claude-config/.claude.json" \
                         "$CLAUDE_CONFIG_DIR/.claude.json" \
-                        600 ".claude.json"
-        
+                        600 ".claude.json" || true
+
         copy_config_file "/host-claude-config/.credentials.json" \
                         "$CLAUDE_CONFIG_DIR/.credentials.json" \
-                        600 ".credentials.json"
-        
+                        600 ".credentials.json" || true
+
         copy_config_file "/host-claude-config/CLAUDE.md" \
                         "$CLAUDE_CONFIG_DIR/CLAUDE.md" \
-                        644 "CLAUDE.md"
+                        644 "CLAUDE.md" || true
     fi
 }
 
