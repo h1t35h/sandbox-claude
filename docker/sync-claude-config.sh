@@ -124,10 +124,9 @@ sync_claude_config() {
         [ "$SYNCED" = false ] && SYNCED=true
     fi
     
-    # 3. Create a host-sync script for manual copying
-    if [ -d "/workspace" ]; then
-        HOST_SYNC_SCRIPT="/workspace/sync-to-host.sh"
-        cat > "$HOST_SYNC_SCRIPT" << 'SCRIPT_EOF'
+    # 3. Create a host-sync script for manual copying (in /tmp to avoid cluttering workspace)
+    HOST_SYNC_SCRIPT="/tmp/sync-to-host.sh"
+    cat > "$HOST_SYNC_SCRIPT" << 'SCRIPT_EOF'
 #!/bin/bash
 # Run this script on the HOST (not in container) to sync Claude configs
 
@@ -186,10 +185,9 @@ fi
 
 echo -e "${GREEN}Configuration sync complete!${NC}"
 SCRIPT_EOF
-        chmod +x "$HOST_SYNC_SCRIPT"
-        print_success "Created host sync script: $HOST_SYNC_SCRIPT"
-        print_info "Run './sync-to-host.sh' from the workspace directory on the HOST to sync configs"
-    fi
+    chmod +x "$HOST_SYNC_SCRIPT"
+    print_success "Created host sync script: $HOST_SYNC_SCRIPT"
+    print_info "Run 'cat /tmp/sync-to-host.sh' to see manual sync instructions"
     
     if [ "$SYNCED" = true ]; then
         echo ""
@@ -205,9 +203,9 @@ SCRIPT_EOF
             echo "Configs are synced to host at: /tmp/csandbox/.claude/"
             echo "These will be automatically loaded in new containers."
         else
-            echo "To sync to your host system, run one of:"
-            echo "  1. From HOST in workspace dir: ./sync-to-host.sh"
-            echo "  2. From HOST: cp -r $(pwd)/.sandbox-claude/. ~/.claude/"
+            echo "To sync to your host system:"
+            echo "  1. Run 'cat /tmp/sync-to-host.sh' for manual sync instructions"
+            echo "  2. From HOST: cp -r .sandbox-claude/. ~/.claude/"
         fi
         echo "════════════════════════════════════════════════════════════════"
     else
