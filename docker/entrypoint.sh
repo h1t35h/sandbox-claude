@@ -197,6 +197,33 @@ setup_claude_config_files() {
     else
         print_success "Using existing credentials from $CLAUDE_CONFIG_DIR"
     fi
+
+    # Fix installMethod for container environment
+    # Claude is installed via npm in the container, not native
+    if [ -f "$CLAUDE_CONFIG_DIR/.claude.json" ]; then
+        if command -v python3 &> /dev/null; then
+            python3 << EOF
+import json
+import sys
+import os
+
+config_file = os.path.join("$CLAUDE_CONFIG_DIR", ".claude.json")
+try:
+    with open(config_file, 'r') as f:
+        config = json.load(f)
+
+    # Change installMethod from native to npm for container
+    if config.get('installMethod') == 'native':
+        config['installMethod'] = 'npm'
+        with open(config_file, 'w') as f:
+            json.dump(config, f, indent=4)
+        print("[INFO] Fixed installMethod to 'npm' for container environment", file=sys.stderr)
+except Exception as e:
+    print(f"[WARNING] Could not fix installMethod: {e}", file=sys.stderr)
+    pass
+EOF
+        fi
+    fi
 }
 
 # List configuration files
